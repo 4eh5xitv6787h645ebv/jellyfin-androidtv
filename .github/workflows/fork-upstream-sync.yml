@@ -1,0 +1,66 @@
+# FORK: early warning for upstream conflicts.
+#
+# Trial-merges upstream into a throwaway branch and builds it. Nothing is pushed. The point is to
+# learn that upstream broke us weeks before an actual sync, while the offending upstream commit is
+# still easy to find.
+name: Upstream sync check
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream ref to trial-merge
+        default: upstream/master
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  trial-merge:
+    name: Trial-merge upstream
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/jellyfin/jellyfin-androidtv.git
+          git fetch upstream --tags
+
+      - name: Trial-merge
+        id: merge
+        run: |
+          git config user.name 'fork-sync'
+          git config user.email 'fork-sync@users.noreply.github.com'
+          REF='${{ inputs.ref || 'upstream/master' }}'
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          if git merge --no-edit --no-ff "$REF"; then
+            echo 'Merged cleanly.'
+          else
+            echo '::error::Merge conflicts against '"$REF"'. Conflicting files:'
+            git diff --name-only --diff-filter=U | sed 's/^/  /'
+            exit 1
+          fi
+
+      - name: Report upstream diff budget
+        if: success()
+        run: bash scripts/fork/diff-budget.sh "${{ steps.merge.outputs.ref }}"
+
+      - uses: actions/setup-java@v4
+        if: success()
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: success()
+
+      - name: Build merged tree
+        if: success()
+        run: ./gradlew --no-daemon :fork:test :app:assembleForkDebug

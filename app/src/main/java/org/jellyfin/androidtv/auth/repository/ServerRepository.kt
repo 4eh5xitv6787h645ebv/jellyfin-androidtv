@@ -16,6 +16,7 @@ import org.jellyfin.androidtv.auth.model.Server
 import org.jellyfin.androidtv.auth.model.ServerAdditionState
 import org.jellyfin.androidtv.auth.model.UnableToConnectState
 import org.jellyfin.androidtv.auth.store.AuthenticationStore
+import org.jellyfin.androidtv.fork.ForkConfig // FORK
 import org.jellyfin.androidtv.util.sdk.toServer
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
@@ -52,7 +53,11 @@ interface ServerRepository {
 	suspend fun deleteServer(server: UUID): Boolean
 
 	companion object {
-		val minimumServerVersion = Jellyfin.minimumVersion.copy(build = null)
+		// FORK: this client supports Jellyfin 10.12+ only. Raising the floor here is enough --
+		// it propagates to Server.versionSupported, the login gate in AuthenticationRepository,
+		// the SDK's server discovery (AppModule) and the outdated-server notification. Upstream's
+		// legacy compatibility code stays in place but unreachable, so merges stay clean.
+		val minimumServerVersion = ForkConfig.MINIMUM_SERVER_VERSION
 		val recommendedServerVersion = Jellyfin.apiVersion.copy(build = null)
 
 		val upcomingMinimumServerVersion = ServerVersion(10, 11, 0)

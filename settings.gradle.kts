@@ -7,6 +7,7 @@ include(":app")
 
 // Modules
 include(":design")
+include(":fork") // FORK: all fork-specific code lives here
 include(":playback:core")
 include(":playback:jellyfin")
 include(":playback:media3:exoplayer")

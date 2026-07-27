@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Fork flavor resource overrides.
+
+	Source set priority is buildType > flavor > main, so anything redefined here silently replaces
+	app/src/main/res/ without editing it. This file is the demonstration and the place to rename the
+	app; add colors.xml, themes.xml, drawables and so on alongside it the same way.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
+	<!-- TODO: name the fork. These override app/src/main/res/values/strings.xml. -->
+	<string name="app_name_release" translatable="false" tools:ignore="UnusedResources">Jellyfin Fork</string>
+	<string name="app_name_debug" translatable="false" tools:ignore="UnusedResources">Jellyfin Fork Debug</string>
+</resources>

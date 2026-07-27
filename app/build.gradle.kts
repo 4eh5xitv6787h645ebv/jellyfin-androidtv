@@ -19,6 +19,22 @@ android {
 		versionCode = getVersionCode(versionName!!)
 	}
 
+	// FORK: "vanilla" builds upstream untouched, "fork" adds the app/src/fork source set on top.
+	// Resources, manifest entries and new classes placed in app/src/fork/ override or extend
+	// app/src/main/ without editing a single upstream file.
+	flavorDimensions += "distribution"
+
+	productFlavors {
+		create("vanilla") {
+			dimension = "distribution"
+		}
+
+		create("fork") {
+			dimension = "distribution"
+			applicationIdSuffix = ".fork"
+		}
+	}
+
 	buildFeatures {
 		buildConfig = true
 		viewBinding = true
@@ -110,8 +126,26 @@ tasks.register("versionTxt") {
 	}
 }
 
+// FORK: the buildTypes above derive app_id and the search-suggestion provider authority from
+// `namespace`, which does not account for a flavor's applicationIdSuffix. Left alone, the fork
+// variant would declare the same content provider authority as the vanilla build and the two could
+// not be installed side by side. Recompute all three from the real, flavored application id.
+androidComponents {
+	onVariants { variant ->
+		fun resValue(name: String, value: org.gradle.api.provider.Provider<String>) = variant.resValues.put(
+			variant.makeResValueKey("string", name),
+			value.map { com.android.build.api.variant.ResValue(it) },
+		)
+
+		resValue("app_id", variant.applicationId)
+		resValue("app_search_suggest_authority", variant.applicationId.map { "$it.content" })
+		resValue("app_search_suggest_intent_data", variant.applicationId.map { "content://$it.content/intent" })
+	}
+}
+
 dependencies {
 	// Jellyfin
+	implementation(projects.fork) // FORK
 	implementation(projects.design)
 	implementation(projects.playback.core)
 	implementation(projects.playback.jellyfin)
