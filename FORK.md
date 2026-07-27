@@ -124,15 +124,27 @@ scripts/fork/diff-budget.sh
 
 | File | Change | Why a seam could not be used |
 | --- | --- | --- |
-| `settings.gradle.kts` | +1 line: `include(":fork")` | Gradle module list is not extensible from outside. |
+| `settings.gradle.kts` | `include(":fork")`; added the Central Portal snapshot repo | Gradle module list and repositories are not extensible from outside. Upstream's snapshot repo (`s01.oss.sonatype.org`) is retired and 404s. |
 | `app/build.gradle.kts` | flavor block, `implementation(projects.fork)`, `androidComponents` resValue fix | Flavors and dependencies must be declared in the module's own build script. |
 | `app/src/main/java/org/jellyfin/androidtv/auth/repository/ServerRepository.kt` | +1 import, 1 line: `minimumServerVersion` | It is a `val` in a `companion object`, not a DI binding, so it cannot be overridden at runtime. |
 
-### Why the 10.12 floor is one line and not a deletion
+### Why the version floor is one line and not a deletion
 
-This client supports **Jellyfin 10.12 and newer only**. The tempting implementation — deleting
+This client supports **Jellyfin 12 and newer only**. The tempting implementation — deleting
 upstream's compatibility code for older servers — is the single most merge-hostile change possible,
 because every future upstream edit to those files conflicts against the deletion.
+
+**The version floor and the SDK are separate decisions.** The floor controls which servers this
+client accepts. The SDK controls which API surface it calls. Jellyfin 12 still serves the 10.x API,
+so a 12-only client can be built against the stable SDK today — and must be, for now: compiling
+upstream against `openapi-unstable-SNAPSHOT` (the v12 API) produces 29 errors in
+`:playback:jellyfin` alone, because `lyricsApi`, `mediaSegmentsApi`, `videosApi`, `playStateApi`,
+`itemsApi` and `userLibraryApi` were renamed or restructured and the paged-response shape changed.
+
+Porting to that SDK now would mean rewriting large parts of `playback/` and `app/` — precisely the
+unbounded upstream diff this architecture exists to prevent, and it would collide head-on with
+upstream's own port later. Wait for upstream to adopt the v12 SDK, then inherit it free via a merge.
+`gradle.properties` already has the `sdk.version=unstable-snapshot` switch when that day comes.
 
 Instead we raise the floor upstream already checks against
 (`ForkConfig.MINIMUM_SERVER_VERSION` → `ServerRepository.minimumServerVersion`). That one value

@@ -53,7 +53,7 @@ interface ServerRepository {
 	suspend fun deleteServer(server: UUID): Boolean
 
 	companion object {
-		// FORK: this client supports Jellyfin 10.12+ only. Raising the floor here is enough --
+		// FORK: this client supports Jellyfin 12+ only. Raising the floor here is enough --
 		// it propagates to Server.versionSupported, the login gate in AuthenticationRepository,
 		// the SDK's server discovery (AppModule) and the outdated-server notification. Upstream's
 		// legacy compatibility code stays in place but unreachable, so merges stay clean.
