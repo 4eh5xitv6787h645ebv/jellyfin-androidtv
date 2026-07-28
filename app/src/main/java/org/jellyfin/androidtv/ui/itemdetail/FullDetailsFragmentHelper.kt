@@ -4,12 +4,14 @@ import android.content.ActivityNotFoundException
 import android.view.View
 import android.widget.Toast
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.data.model.DataRefreshService
+import org.jellyfin.androidtv.data.repository.CanopySpoilerRepository
 import org.jellyfin.androidtv.data.repository.ItemMutationRepository
 import org.jellyfin.androidtv.data.repository.ItemRepository
 import org.jellyfin.androidtv.ui.navigation.Destinations
@@ -396,5 +398,64 @@ fun FullDetailsFragment.getLiveTvChannel(
 		}.onSuccess { channel ->
 			callback(channel)
 		}
+	}
+}
+
+/**
+ * Reads the current Spoiler Guard enrolment for this item and reflects it on the
+ * button, without changing anything.
+ *
+ * Runs on every detail load, so it must fail quietly: Canopy is a plugin and may be
+ * absent, disabled or older than these routes. In that case the button stays inactive
+ * rather than the screen showing an error for something the user did not ask for.
+ */
+fun FullDetailsFragment.refreshSpoilerBlurState() {
+	val canopySpoilerRepository by inject<CanopySpoilerRepository>()
+	val item = mBaseItem ?: return
+	val button = spoilerBlurButton ?: return
+
+	lifecycleScope.launch {
+		val enabled = try {
+			canopySpoilerRepository.isEnabled(item.id)
+		} catch (error: ApiClientException) {
+			Timber.d(error, "Canopy Spoiler Guard state unavailable for ${item.id}")
+			return@launch
+		}
+
+		if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+		button.isActivated = enabled
+	}
+}
+
+/**
+ * Toggles Spoiler Guard for the shown series.
+ *
+ * The button is only repainted after the server confirms, so a failure leaves the UI
+ * telling the truth rather than showing a state the server never accepted.
+ */
+fun FullDetailsFragment.toggleSpoilerBlur() {
+	val canopySpoilerRepository by inject<CanopySpoilerRepository>()
+	val item = mBaseItem ?: return
+	val button = spoilerBlurButton ?: return
+
+	lifecycleScope.launch {
+		val enabled = try {
+			val wasEnabled = canopySpoilerRepository.isEnabled(item.id)
+			if (wasEnabled) canopySpoilerRepository.disable(item.id)
+			else canopySpoilerRepository.enable(item.id)
+			!wasEnabled
+		} catch (error: ApiClientException) {
+			Timber.e(error, "Failed to toggle Spoiler Guard for ${item.name} (id=${item.id})")
+			Toast.makeText(context, getString(R.string.spoiler_guard_toggle_failed), Toast.LENGTH_LONG).show()
+			return@launch
+		}
+
+		if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+		button.isActivated = enabled
+		Toast.makeText(
+			context,
+			getString(if (enabled) R.string.spoiler_guard_enabled else R.string.spoiler_guard_disabled),
+			Toast.LENGTH_SHORT,
+		).show()
 	}
 }

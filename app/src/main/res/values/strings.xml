@@ -669,4 +669,8 @@
     <string name="truehd">TrueHD</string>
     <string name="eac3_atmos">DD+ Atmos</string>
     <string name="truehd_atmos">TrueHD Atmos</string>
+	<string name="lbl_spoiler_guard">Spoiler Guard</string>
+	<string name="spoiler_guard_enabled">Spoiler Guard on for this show</string>
+	<string name="spoiler_guard_disabled">Spoiler Guard off for this show</string>
+	<string name="spoiler_guard_toggle_failed">Couldn\'t reach Jellyfin Canopy to change Spoiler Guard</string>
 </resources>
