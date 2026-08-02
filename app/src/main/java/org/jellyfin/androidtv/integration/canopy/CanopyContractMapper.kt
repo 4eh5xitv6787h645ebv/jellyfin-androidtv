@@ -5,7 +5,7 @@ import java.time.Instant
 internal object CanopyContractBounds {
 	const val MAX_RESOLVE_BYTES = 65_536
 	const val MAX_ACTION_BYTES = 32_768
-	const val MAX_CONTRIBUTIONS = 16
+	const val MAX_CONTRIBUTIONS = 7
 	const val MAX_FIELDS = 8
 	const val MAX_OPTIONS = 32
 	const val MAX_REFRESH_TARGETS = 8

@@ -117,6 +117,27 @@ class CanopyClientTests : FunSpec({
 		}
 	}
 
+	test("resolve pins the reviewed seven-contribution boundary") {
+		fun responseWith(count: Int) = CanopyResolveResponseWire(
+			catalogRevision = "catalog-v1-boundary",
+			contributions = List(count) { index ->
+				CanopyContributionWire(
+					id = "status-$index",
+					kind = "status",
+					label = "Status $index",
+					tone = "neutral",
+				)
+			},
+		)
+
+		CanopyContractMapper.resolvedSurface(
+			responseWith(CanopyContractBounds.MAX_CONTRIBUTIONS),
+		).contributions.size shouldBe 7
+		shouldThrow<CanopyContractException> {
+			CanopyContractMapper.resolvedSurface(responseWith(CanopyContractBounds.MAX_CONTRIBUTIONS + 1))
+		}
+	}
+
 	test("duplicate object properties fail closed for every successful response family") {
 		val duplicateDiscovery = fixture("discovery.200.json")
 			.replace("\"Available\": true", "\"Available\": true, \"Available\": false")
