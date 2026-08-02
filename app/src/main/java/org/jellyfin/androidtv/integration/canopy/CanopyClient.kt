@@ -269,7 +269,9 @@ internal class CanopyClient internal constructor(
 		} catch (_: CharacterCodingException) {
 			return invalidResponse(response.status)
 		}
-		if (!responseText.hasBoundedJsonNesting()) return invalidResponse(response.status)
+		if (!responseText.hasBoundedJsonNesting() || !CanopyDuplicateKeyGuard.accepts(responseText)) {
+			return invalidResponse(response.status)
+		}
 
 		return try {
 			val wire = json.decodeFromString<W>(responseText)
@@ -290,7 +292,7 @@ internal class CanopyClient internal constructor(
 		val error = runCatching {
 			response.body.decodeToString(throwOnInvalidSequence = true)
 		}.getOrNull()
-			?.takeIf { it.hasBoundedJsonNesting() }
+			?.takeIf { it.hasBoundedJsonNesting() && CanopyDuplicateKeyGuard.accepts(it) }
 			?.let {
 				try {
 					CanopyContractMapper.platformError(json.decodeFromString<CanopyErrorWire>(it))
@@ -327,9 +329,11 @@ internal class CanopyClient internal constructor(
 		CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, status)
 
 	private fun CanopyHttpResponse.etag(): String? = headers.entries
-		.firstOrNull { (name) -> name.equals("ETag", ignoreCase = true) }
+		.filter { (name) -> name.equals("ETag", ignoreCase = true) }
+		.singleOrNull()
 		?.value
-		?.firstOrNull()
+		?.singleOrNull()
+		?.takeIf(STRONG_ETAG::matches)
 
 	private fun CanopyHttpResponse.hasJsonContentType(): Boolean = headers.entries
 		.firstOrNull { (name) -> name.equals("Content-Type", ignoreCase = true) }
@@ -355,5 +359,6 @@ internal class CanopyClient internal constructor(
 		const val RESOLVE_PATH = "$PREFIX/surfaces/item-detail/resolve"
 		const val PREPARE_PATH = "$PREFIX/actions/prepare"
 		const val INVOKE_PATH = "$PREFIX/actions/invoke"
+		val STRONG_ETAG = Regex("^\"sha256-[0-9a-f]{64}\"$")
 	}
 }

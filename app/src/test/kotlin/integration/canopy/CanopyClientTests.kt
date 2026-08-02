@@ -80,14 +80,15 @@ class CanopyClientTests : FunSpec({
 	}
 
 	test("resolve omits unknown contributions and safely falls back unknown presentation values") {
-		val transport = FixtureTransport(response(200, fixture("resolve.action-status.200.json"), mapOf("etag" to listOf("\"revision-7\""))))
+		val strongEtag = "\"sha256-${"0".repeat(64)}\""
+		val transport = FixtureTransport(response(200, fixture("resolve.action-status.200.json"), mapOf("etag" to listOf(strongEtag))))
 		val result = CanopyClient(transport).resolveItemDetail(
 			UUID.fromString("01234567-89ab-cdef-0123-456789abcdef"),
 			Locale.forLanguageTag("en-AU"),
 		)
 
 		val success = result as CanopyCallResult.Success
-		success.etag shouldBe "\"revision-7\""
+		success.etag shouldBe strongEtag
 		success.value.contributions.size shouldBe 2
 		(success.value.contributions[0] as CanopyContribution.Action).icon shouldBe CanopySemanticIcon.DEFAULT
 		(success.value.contributions[1] as CanopyContribution.Status).tone shouldBe CanopyTone.NEUTRAL
@@ -97,6 +98,85 @@ class CanopyClientTests : FunSpec({
 		body["Item"]!!.jsonObject["Id"]!!.jsonPrimitive.content shouldBe "01234567-89ab-cdef-0123-456789abcdef"
 		body["Client"]!!.jsonObject["FieldKinds"]!!.jsonArray.map { it.jsonPrimitive.content } shouldContainExactly
 			listOf("confirmation", "boolean", "single_select", "multi_select")
+	}
+
+	test("resolve retains only a canonical strong catalog etag") {
+		val valid = "\"sha256-${"0".repeat(64)}\""
+		listOf(
+			mapOf("ETag" to listOf("\"revision-7\"")),
+			mapOf("ETag" to listOf("W/$valid")),
+			mapOf("ETag" to listOf("\"sha256-${"G".repeat(64)}\"")),
+			mapOf("ETag" to listOf(valid, "\"forged\"")),
+			linkedMapOf("ETag" to listOf(valid), "etag" to listOf(valid)),
+		).forEach { ambiguousOrInvalid ->
+			val result = CanopyClient(
+				FixtureTransport(response(200, fixture("resolve.action-status.200.json"), ambiguousOrInvalid)),
+			).resolveItemDetail(TEST_ITEM_ID) as CanopyCallResult.Success
+
+			result.etag shouldBe null
+		}
+	}
+
+	test("duplicate object properties fail closed for every successful response family") {
+		val duplicateDiscovery = fixture("discovery.200.json")
+			.replace("\"Available\": true", "\"Available\": true, \"Available\": false")
+		val duplicateResolve = fixture("resolve.action-status.200.json")
+			.replace("\"CatalogRevision\": \"revision-7\"", "\"CatalogRevision\": \"revision-7\", \"CatalogRevision\": \"forged\"")
+		val duplicatePrepare = fixture("prepare.all-field-kinds.200.json")
+			.replace("\"Title\": \"Apply settings\"", "\"Title\": \"Apply settings\", \"Title\": \"Forged\"")
+		val duplicateInvoke = fixture("invoke.success.200.json")
+			.replace("\"Outcome\": \"succeeded\"", "\"Outcome\": \"succeeded\", \"Outcome\": \"forged\"")
+
+		CanopyClient(FixtureTransport(response(200, duplicateDiscovery))).discover() shouldBe invalidResponse()
+		CanopyClient(FixtureTransport(response(200, duplicateResolve))).resolveItemDetail(TEST_ITEM_ID) shouldBe invalidResponse()
+		CanopyClient(FixtureTransport(response(200, duplicatePrepare))).prepare(prepareHandle()) shouldBe invalidResponse()
+		CanopyClient(FixtureTransport(response(200, duplicateInvoke))).invoke(
+			preparedAction(),
+			UUID.randomUUID(),
+			requiredAnswers(),
+		) shouldBe invalidResponse()
+	}
+
+	test("duplicate nested contribution field option message and refresh properties fail closed") {
+		val duplicateContribution = fixture("resolve.action-status.200.json")
+			.replace("\"Label\": \"Apply choice\"", "\"Label\": \"Apply choice\", \"Label\": \"Forged\"")
+		val duplicateField = fixture("prepare.all-field-kinds.200.json")
+			.replace("\"Label\": \"Continue?\"", "\"Label\": \"Continue?\", \"Label\": \"Forged\"")
+		val duplicateOption = fixture("prepare.all-field-kinds.200.json")
+			.replace("{\"Id\": \"a\", \"Label\": \"Option A\"}", "{\"Id\": \"a\", \"Id\": \"forged\", \"Label\": \"Option A\"}")
+		val duplicateMessage = fixture("invoke.success.200.json")
+			.replace("\"Text\": \"Applied\"", "\"Text\": \"Applied\", \"Text\": \"Forged\"")
+		val duplicateRefresh = fixture("invoke.success.200.json")
+			.replace("\"CatalogRevision\": \"revision-8\"", "\"CatalogRevision\": \"revision-8\", \"CatalogRevision\": \"forged\"")
+
+		CanopyClient(FixtureTransport(response(200, duplicateContribution))).resolveItemDetail(TEST_ITEM_ID) shouldBe invalidResponse()
+		listOf(duplicateField, duplicateOption).forEach { body ->
+			CanopyClient(FixtureTransport(response(200, body))).prepare(prepareHandle()) shouldBe invalidResponse()
+		}
+		listOf(duplicateMessage, duplicateRefresh).forEach { body ->
+			CanopyClient(FixtureTransport(response(200, body))).invoke(
+				preparedAction(),
+				UUID.randomUUID(),
+				requiredAnswers(),
+			) shouldBe invalidResponse()
+		}
+	}
+
+	test("duplicate error properties discard the ambiguous structured envelope") {
+		val duplicate = fixture("error.503.json")
+			.replace("\"Code\": \"unavailable\"", "\"Code\": \"unavailable\", \"Code\": \"forged\"")
+
+		CanopyClient(FixtureTransport(response(503, duplicate))).discover() shouldBe
+			CanopyCallResult.Failure(CanopyFailureKind.HTTP, 503, error = null)
+	}
+
+	test("duplicate guard distinguishes sibling keys and string content but normalizes escaped keys") {
+		CanopyDuplicateKeyGuard.accepts(
+			"""{"Future":{"Id":"one"},"Peers":[{"Id":"two"},{"Id":"three"}],"Text":"\\\"Id\\\":not-a-key"}""",
+		) shouldBe true
+		CanopyDuplicateKeyGuard.accepts(
+			"""{"Available":true,"\u0041vailable":false,"ProtocolMinimum":1,"ProtocolMaximum":1}""",
+		) shouldBe false
 	}
 
 	test("resolve rejects duplicate contribution ids") {
@@ -383,6 +463,8 @@ private fun response(
 )
 
 private fun jsonHeaders(value: String = "application/json") = mapOf("Content-Type" to listOf(value))
+
+private fun invalidResponse() = CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
 
 private fun prepareHandle() = CanopyContractMapper.prepareHandle("opaque-prepare-handle")
 
