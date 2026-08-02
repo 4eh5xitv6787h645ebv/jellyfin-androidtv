@@ -168,6 +168,47 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 		gateway.calls.none { it == "invoke" } shouldBe true
 	}
 
+	test("an absent prepared action fails closed as unavailable") {
+		val gateway = FakeGateway().apply { prepareResponse = { CanopyCallResult.Absent } }
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+		coordinator.bind(ITEM_ONE)
+
+		coordinator.prepare("usable")
+
+		events.filterIsInstance<CanopyItemDetailEvent.Form>() shouldBe emptyList()
+		(events.last() as CanopyItemDetailEvent.Message).fallback shouldBe
+			CanopyItemDetailEvent.Message.Fallback.ACTION_UNAVAILABLE
+	}
+
+	test("an absent invoke emits unavailable and permits an exact retry") {
+		var invocation = 0
+		val gateway = FakeGateway().apply {
+			invokeResponse = { _, _, _ ->
+				invocation++
+				if (invocation == 1) CanopyCallResult.Absent
+				else CanopyCallResult.Success(CanopyActionResult(CanopyActionOutcome.SUCCEEDED, null, null, emptySet()))
+			}
+		}
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+		coordinator.bind(ITEM_ONE)
+		coordinator.prepare("usable")
+		val prepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().single().value
+		val completed = prepared.form.setChecked("confirm", true)
+
+		coordinator.submit(prepared, completed)
+		coordinator.submit(prepared, completed)
+
+		gateway.calls.count { it == "invoke" } shouldBe 2
+		gateway.invocationKeys.distinct().size shouldBe 1
+		gateway.invocationAnswers shouldContainExactly listOf(completed.answers(), completed.answers())
+		events.filterIsInstance<CanopyItemDetailEvent.Message>().map { it.fallback } shouldContainExactly listOf(
+			CanopyItemDetailEvent.Message.Fallback.ACTION_UNAVAILABLE,
+			CanopyItemDetailEvent.Message.Fallback.ACTION_SUCCEEDED,
+		)
+	}
+
 	test("double submit invokes once with one fresh idempotency key and emits exact refresh targets") {
 		val invocation = CompletableDeferred<CanopyCallResult<CanopyActionResult>>()
 		val gateway = FakeGateway().apply { invokeResponse = { _, _, _ -> invocation.await() } }

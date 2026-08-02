@@ -214,7 +214,7 @@ internal class CanopyItemDetailCoordinator(
 					activeForm = prepared
 					onEvent(CanopyItemDetailEvent.Form(prepared))
 				}
-				else -> if (requestGeneration == generation && result.isActionFailure()) {
+				else -> if (requestGeneration == generation) {
 					onEvent(unavailableMessage(result.serverMessage()))
 				}
 			}
@@ -250,7 +250,7 @@ internal class CanopyItemDetailCoordinator(
 						onEvent(CanopyItemDetailEvent.Refresh(checkNotNull(itemId), result.value.refreshTargets))
 					}
 				}
-				else -> if (requestGeneration == generation && result.isActionFailure()) {
+				else -> if (requestGeneration == generation) {
 					onEvent(unavailableMessage(result.serverMessage()))
 				}
 			}
@@ -303,5 +303,4 @@ internal class CanopyItemDetailCoordinator(
 
 	private fun <T> CanopyCallResult<T>.successValue(): T? = (this as? CanopyCallResult.Success)?.value
 	private fun CanopyCallResult<*>.serverMessage(): String? = (this as? CanopyCallResult.Failure)?.error?.message
-	private fun CanopyCallResult<*>.isActionFailure() = this !is CanopyCallResult.Absent
 }
