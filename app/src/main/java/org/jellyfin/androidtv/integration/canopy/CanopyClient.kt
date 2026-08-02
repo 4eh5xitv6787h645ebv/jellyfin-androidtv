@@ -191,6 +191,9 @@ internal class CanopyClient internal constructor(
 		idempotencyKey: UUID,
 		answers: List<CanopyAnswer>,
 	): CanopyCallResult<CanopyActionResult> {
+		// Deliberate draft-contract dependency: Jellyfin SDK 1.8.12 cannot attach a custom
+		// idempotency header. The future /actions/invoke schema must therefore freeze the
+		// body-carried IdempotencyKey parsed by the transport-neutral Canopy #522 work.
 		val request = try {
 			CanopyContractMapper.invokeRequest(preparedAction, idempotencyKey.toString(), answers)
 		} catch (_: CanopyContractException) {

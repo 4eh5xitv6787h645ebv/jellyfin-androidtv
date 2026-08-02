@@ -19,6 +19,11 @@ internal data class CanopyPreparedForm(
 	val form: CanopyActionForm,
 )
 
+private data class CanopySubmissionSnapshot(
+	val prepared: CanopyPreparedForm,
+	val answers: List<CanopyAnswer>,
+)
+
 internal data class CanopyActionLayout(
 	val direct: List<CanopyContribution.Action>,
 	val overflow: List<CanopyContribution.Action>,
@@ -150,6 +155,7 @@ internal class CanopyItemDetailCoordinator(
 	private var itemId: UUID? = null
 	private var actions = emptyMap<String, CanopyContribution.Action>()
 	private var activeForm: CanopyPreparedForm? = null
+	private var submissionSnapshot: CanopySubmissionSnapshot? = null
 	private var submitting = false
 
 	fun bind(newItemId: UUID, force: Boolean = false) {
@@ -189,6 +195,7 @@ internal class CanopyItemDetailCoordinator(
 		val requestGeneration = generation
 		actionJob?.cancel()
 		activeForm = null
+		submissionSnapshot = null
 		submitting = false
 		actionJob = scope.launch {
 			when (val result = gateway.prepare(handle)) {
@@ -216,24 +223,22 @@ internal class CanopyItemDetailCoordinator(
 
 	fun submit(prepared: CanopyPreparedForm, form: CanopyActionForm) {
 		if (submitting || activeForm !== prepared || prepared.generation != generation) return
-		val errors = form.validationErrors()
-		if (errors.isNotEmpty()) {
-			onEvent(CanopyItemDetailEvent.InvalidForm(errors))
-			return
-		}
 		if (!clock.instant().isBefore(prepared.action.expiresAt)) {
 			activeForm = null
+			submissionSnapshot = null
 			onEvent(expiredMessage())
 			return
 		}
+		val answers = answersForSubmission(prepared, form) ?: return
 
 		submitting = true
 		onEvent(CanopyItemDetailEvent.Submitting)
 		val requestGeneration = generation
 		actionJob = scope.launch {
-			when (val result = gateway.invoke(prepared.action, prepared.idempotencyKey, form.answers())) {
+			when (val result = gateway.invoke(prepared.action, prepared.idempotencyKey, answers)) {
 				is CanopyCallResult.Success -> if (requestGeneration == generation) {
 					activeForm = null
+					submissionSnapshot = null
 					onEvent(
 						CanopyItemDetailEvent.Message(
 							text = result.value.message?.text,
@@ -257,6 +262,17 @@ internal class CanopyItemDetailCoordinator(
 		reset(null)
 	}
 
+	private fun answersForSubmission(prepared: CanopyPreparedForm, form: CanopyActionForm): List<CanopyAnswer>? {
+		val snapshot = submissionSnapshot
+		if (snapshot != null) return snapshot.answers.takeIf { snapshot.prepared === prepared }
+		val errors = form.validationErrors()
+		if (errors.isNotEmpty()) {
+			onEvent(CanopyItemDetailEvent.InvalidForm(errors))
+			return null
+		}
+		return form.answers().also { submissionSnapshot = CanopySubmissionSnapshot(prepared, it) }
+	}
+
 	private fun reset(newItemId: UUID?): Long {
 		generation++
 		surfaceJob?.cancel()
@@ -264,6 +280,7 @@ internal class CanopyItemDetailCoordinator(
 		itemId = newItemId
 		actions = emptyMap()
 		activeForm = null
+		submissionSnapshot = null
 		submitting = false
 		onEvent(CanopyItemDetailEvent.Surface(null))
 		return generation

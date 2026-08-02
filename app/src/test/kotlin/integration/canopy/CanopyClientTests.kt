@@ -188,7 +188,7 @@ class CanopyClientTests : FunSpec({
 		}
 	}
 
-	test("invoke puts idempotency and typed answers in the JSON body") {
+	test("SDK 1.8.12 draft invoke contract carries IdempotencyKey in body for transport-neutral 522 parser") {
 		val transport = FixtureTransport(response(200, fixture("invoke.success.200.json")))
 		val idempotencyKey = UUID.fromString("9e30bb75-916e-48ac-984d-e65509cd2850")
 		val result = CanopyClient(transport).invoke(

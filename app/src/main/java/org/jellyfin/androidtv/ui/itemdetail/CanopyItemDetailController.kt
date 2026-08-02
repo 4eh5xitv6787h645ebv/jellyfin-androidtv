@@ -2,7 +2,9 @@ package org.jellyfin.androidtv.ui.itemdetail
 
 import android.app.AlertDialog
 import android.content.DialogInterface
+import android.graphics.Color
 import android.graphics.Typeface
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
@@ -16,6 +18,7 @@ import androidx.core.view.setPadding
 import androidx.leanback.widget.ArrayObjectAdapter
 import androidx.leanback.widget.HeaderItem
 import androidx.leanback.widget.ListRow
+import androidx.leanback.widget.Presenter
 import androidx.lifecycle.lifecycleScope
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.data.model.DataRefreshService
@@ -49,6 +52,8 @@ internal class CanopyItemDetailController(
 	)
 	private var dialog: AlertDialog? = null
 	private var submitButton: View? = null
+	private var formContent: View? = null
+	private var formInteractionState = CanopyFormInteractionState.EDITING
 	private var overflowActions = emptyList<CanopyContribution.Action>()
 
 	fun bind(itemId: UUID) = coordinator.bind(itemId)
@@ -58,6 +63,8 @@ internal class CanopyItemDetailController(
 		dialog?.dismiss()
 		dialog = null
 		submitButton = null
+		formContent = null
+		formInteractionState = CanopyFormInteractionState.EDITING
 	}
 
 	fun handleClick(item: Any?): Boolean = when (item) {
@@ -69,7 +76,6 @@ internal class CanopyItemDetailController(
 			showOverflow()
 			true
 		}
-		is CanopyStatusButton -> true
 		else -> false
 	}
 
@@ -77,9 +83,12 @@ internal class CanopyItemDetailController(
 		when (event) {
 			is CanopyItemDetailEvent.Surface -> showSurface(event.value)
 			is CanopyItemDetailEvent.Form -> showForm(event.value)
-			CanopyItemDetailEvent.Submitting -> submitButton?.isEnabled = false
+			CanopyItemDetailEvent.Submitting -> {
+				formInteractionState = formInteractionState.submitting()
+				applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
+			}
 			is CanopyItemDetailEvent.InvalidForm -> {
-				submitButton?.isEnabled = true
+				applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
 				val context = fragment.context ?: return
 				Toast.makeText(context, R.string.canopy_complete_required_fields, Toast.LENGTH_LONG).show()
 			}
@@ -89,8 +98,11 @@ internal class CanopyItemDetailController(
 					dialog?.dismiss()
 					dialog = null
 					submitButton = null
+					formContent = null
+					formInteractionState = CanopyFormInteractionState.EDITING
 				} else {
-					submitButton?.isEnabled = true
+					formInteractionState = formInteractionState.failed()
+					applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
 				}
 				val context = fragment.context ?: return
 				val fallback = when (event.fallback) {
@@ -111,8 +123,23 @@ internal class CanopyItemDetailController(
 			return
 		}
 
-		val adapter = ArrayObjectAdapter(GridButtonPresenter(width = 155, imageHeight = 110))
 		val layout = CanopyActionLayout.create(value.actions)
+		val statusText = value.statuses.joinToString(separator = " · ") { it.label }
+		val heading = if (statusText.isEmpty()) {
+			fragment.getString(R.string.canopy_actions)
+		} else {
+			fragment.getString(R.string.canopy_actions_with_status, statusText)
+		}
+		if (value.actions.isEmpty()) {
+			overflowActions = emptyList()
+			val statusAdapter = ArrayObjectAdapter(CanopyStatusPresenter()).apply {
+				add(CanopyStatusText(statusText))
+			}
+			fragment.setCanopyActionRow(ListRow(HeaderItem(heading), statusAdapter))
+			return
+		}
+
+		val adapter = ArrayObjectAdapter(GridButtonPresenter(width = 155, imageHeight = 110))
 		layout.direct.forEachIndexed { index, action ->
 			adapter.add(
 				CanopyActionButton(
@@ -129,21 +156,14 @@ internal class CanopyItemDetailController(
 			adapter.add(CanopyOverflowButton(fragment.getString(R.string.lbl_other_options)))
 		}
 
-		val statusText = value.statuses.joinToString(separator = " · ") { it.label }
-		if (value.actions.isEmpty() && statusText.isNotEmpty()) {
-			adapter.add(CanopyStatusButton(statusText))
-		}
-		val heading = if (statusText.isEmpty()) {
-			fragment.getString(R.string.canopy_actions)
-		} else {
-			fragment.getString(R.string.canopy_actions_with_status, statusText)
-		}
 		fragment.setCanopyActionRow(ListRow(HeaderItem(heading), adapter))
 	}
 
 	private fun showOverflow() {
 		if (overflowActions.isEmpty() || !fragment.isAdded) return
 		dialog?.dismiss()
+		formContent = null
+		formInteractionState = CanopyFormInteractionState.EDITING
 		val created = AlertDialog.Builder(fragment.requireContext())
 			.setTitle(R.string.lbl_other_options)
 			.setItems(overflowActions.map { it.label }.toTypedArray()) { _, index ->
@@ -160,8 +180,7 @@ internal class CanopyItemDetailController(
 
 	private fun showForm(prepared: CanopyPreparedForm) {
 		if (!fragment.isAdded) return
-		dialog?.dismiss()
-		var form = prepared.form
+		var form = startForm(prepared)
 		val fieldViews = mutableMapOf<String, View>()
 		val content = LinearLayout(fragment.requireContext()).apply {
 			orientation = LinearLayout.VERTICAL
@@ -187,7 +206,7 @@ internal class CanopyItemDetailController(
 			content.addView(fieldView)
 		}
 
-		val scroll = ScrollView(fragment.requireContext()).apply { addView(content) }
+		val scroll = ScrollView(fragment.requireContext()).apply { addView(content) }.also { formContent = content }
 		val created = AlertDialog.Builder(fragment.requireContext())
 			.setTitle(prepared.action.title)
 			.setView(scroll)
@@ -206,12 +225,15 @@ internal class CanopyItemDetailController(
 					}
 				}
 			}
+			applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
 			fieldViews.values.firstOrNull()?.requestFocus()
 		}
 		created.setOnDismissListener {
 			if (dialog === created) {
 				dialog = null
 				submitButton = null
+				formContent = null
+				formInteractionState = CanopyFormInteractionState.EDITING
 			}
 		}
 		dialog = created
@@ -225,9 +247,9 @@ internal class CanopyItemDetailController(
 	): View = LinearLayout(fragment.requireContext()).apply {
 		orientation = LinearLayout.VERTICAL
 		addView(CheckBox(context).apply {
-			text = requiredLabel(field)
+			text = requiredLabel(fragment, field)
 			isChecked = form.isChecked(field.id)
-			contentDescription = describedLabel(requiredLabel(field), field.description)
+			contentDescription = describedLabel(requiredLabel(fragment, field), field.description)
 			setOnCheckedChangeListener { _, checked -> onChecked(checked) }
 		})
 		field.description?.let { addView(descriptionView(context, it)) }
@@ -276,23 +298,23 @@ internal class CanopyItemDetailController(
 		orientation = LinearLayout.VERTICAL
 		setPadding(0, 8.dp(context), 0, 12.dp(context))
 		addView(TextView(context).apply {
-			text = requiredLabel(field)
+			text = requiredLabel(fragment, field)
 			setTypeface(typeface, Typeface.BOLD)
-			contentDescription = describedLabel(requiredLabel(field), field.description)
+			contentDescription = describedLabel(requiredLabel(fragment, field), field.description)
 		})
 		field.description?.let { addView(descriptionView(context, it)) }
-	}
-
-	private fun requiredLabel(field: CanopyField) = if (field.required) {
-		fragment.getString(R.string.canopy_required_label, field.label)
-	} else {
-		field.label
 	}
 
 	private fun View.firstEnabledFocusable(): View? {
 		if (isEnabled && isFocusable) return this
 		if (this !is ViewGroup) return null
 		return (0 until childCount).firstNotNullOfOrNull { getChildAt(it).firstEnabledFocusable() }
+	}
+
+	private fun startForm(prepared: CanopyPreparedForm): CanopyActionForm {
+		dialog?.dismiss()
+		formInteractionState = CanopyFormInteractionState.EDITING
+		return prepared.form
 	}
 
 	private fun refresh(event: CanopyItemDetailEvent.Refresh) {
@@ -318,9 +340,78 @@ private class CanopyActionButton(
 
 private class CanopyOverflowButton(text: String) : GridButton(Int.MIN_VALUE, text, R.drawable.ic_more)
 
-private class CanopyStatusButton(text: String) : GridButton(Int.MIN_VALUE + 1, text, R.drawable.ic_info)
+internal data class CanopyStatusText(
+	val text: String,
+	val contentDescription: String = text,
+) {
+	val focusable: Boolean get() = false
+	val consumesClick: Boolean get() = false
+}
+
+private class CanopyStatusPresenter : Presenter() {
+	override fun onCreateViewHolder(parent: ViewGroup): ViewHolder = ViewHolder(
+		TextView(parent.context).apply {
+			layoutParams = ViewGroup.LayoutParams(400.dp(context), 80.dp(context))
+			isFocusable = false
+			isFocusableInTouchMode = false
+			isClickable = false
+			importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+			setTextColor(Color.WHITE)
+			gravity = Gravity.CENTER_VERTICAL
+			textSize = STATUS_TEXT_SIZE_SP
+		},
+	)
+
+	override fun onBindViewHolder(viewHolder: ViewHolder, item: Any?) {
+		val status = item as? CanopyStatusText ?: return
+		(viewHolder.view as? TextView)?.apply {
+			text = status.text
+			contentDescription = status.contentDescription
+			isFocusable = status.focusable
+			isFocusableInTouchMode = status.focusable
+			isClickable = status.consumesClick
+		}
+	}
+
+	override fun onUnbindViewHolder(viewHolder: ViewHolder) = Unit
+}
+
+internal enum class CanopyFormInteractionState(
+	val formEditable: Boolean,
+	val submitEnabled: Boolean,
+) {
+	EDITING(formEditable = true, submitEnabled = true),
+	SUBMITTING(formEditable = false, submitEnabled = false),
+	RETRY(formEditable = false, submitEnabled = true),
+	;
+
+	fun submitting() = if (this == EDITING || this == RETRY) SUBMITTING else this
+	fun failed() = if (this == SUBMITTING) RETRY else this
+}
+
+private fun applyCanopyFormInteractionState(
+	formContent: View?,
+	submitButton: View?,
+	state: CanopyFormInteractionState,
+) {
+	formContent?.setCanopyFormControlsEnabled(state.formEditable)
+	submitButton?.isEnabled = state.submitEnabled
+}
+
+private fun View.setCanopyFormControlsEnabled(enabled: Boolean) {
+	if (isFocusable || isClickable) isEnabled = enabled
+	if (this is ViewGroup) {
+		for (index in 0 until childCount) getChildAt(index).setCanopyFormControlsEnabled(enabled)
+	}
+}
 
 private fun describedLabel(label: String, description: String?) = listOfNotNull(label, description).joinToString(". ")
+
+private fun requiredLabel(fragment: FullDetailsFragment, field: CanopyField) = if (field.required) {
+	fragment.getString(R.string.canopy_required_label, field.label)
+} else {
+	field.label
+}
 
 private fun descriptionView(context: android.content.Context, value: String) = TextView(context).apply {
 	text = value
@@ -347,6 +438,7 @@ internal fun dispatchCanopyRefresh(
 
 private const val MAX_CANOPY_TILE_IDS = 5
 private const val CANOPY_ACTION_ID_BASE = Int.MIN_VALUE + 100
+private const val STATUS_TEXT_SIZE_SP = 18f
 
 internal fun canopyActionTileId(index: Int): Int {
 	require(index in 0 until MAX_CANOPY_TILE_IDS)

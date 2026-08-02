@@ -200,7 +200,7 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 		(events.filterIsInstance<CanopyItemDetailEvent.Message>().single()).text shouldBe "Done"
 	}
 
-	test("retry of the same prepared form reuses its idempotency key") {
+	test("retry reuses the first submitted answers and key even if a changed form is supplied") {
 		var invocation = 0
 		val gateway = FakeGateway().apply {
 			invokeResponse = { _, _, _ ->
@@ -215,16 +215,50 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 		coordinator.bind(ITEM_ONE)
 		coordinator.prepare("usable")
 		val prepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().single().value
-		val completed = prepared.form.setChecked("confirm", true)
+		val firstSubmission = prepared.form
+			.setChecked("confirm", true)
+			.selectOne("quality", "fast")
+		val changedAfterFailure = firstSubmission
+			.setChecked("enabled", false)
+			.selectOne("quality", "balanced")
+			.setSelected("targets", "two", true)
 
-		coordinator.submit(prepared, completed)
-		coordinator.submit(prepared, completed)
+		coordinator.submit(prepared, firstSubmission)
+		coordinator.submit(prepared, changedAfterFailure)
 
 		gateway.invocationKeys shouldContainExactly listOf(IDEMPOTENCY_ONE, IDEMPOTENCY_ONE)
+		gateway.invocationAnswers shouldContainExactly listOf(firstSubmission.answers(), firstSubmission.answers())
 		events.filterIsInstance<CanopyItemDetailEvent.Message>().map { it.fallback } shouldContainExactly listOf(
 			CanopyItemDetailEvent.Message.Fallback.ACTION_UNAVAILABLE,
 			CanopyItemDetailEvent.Message.Fallback.ACTION_SUCCEEDED,
 		)
+	}
+
+	test("re-preparing allocates a new key and permits a different answer snapshot") {
+		var invocation = 0
+		val gateway = FakeGateway().apply {
+			invokeResponse = { _, _, _ ->
+				invocation++
+				if (invocation == 1) CanopyCallResult.Failure(CanopyFailureKind.TRANSPORT)
+				else CanopyCallResult.Success(CanopyActionResult(CanopyActionOutcome.SUCCEEDED, null, null, emptySet()))
+			}
+		}
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val keys = ArrayDeque(listOf(IDEMPOTENCY_ONE, IDEMPOTENCY_TWO))
+		val coordinator = coordinator(gateway, events) { keys.removeFirst() }
+		coordinator.bind(ITEM_ONE)
+		coordinator.prepare("usable")
+		val firstPrepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().last().value
+		val firstAnswers = firstPrepared.form.setChecked("confirm", true).selectOne("quality", "fast")
+		coordinator.submit(firstPrepared, firstAnswers)
+
+		coordinator.prepare("usable")
+		val secondPrepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().last().value
+		val secondAnswers = secondPrepared.form.setChecked("confirm", true).setChecked("enabled", false)
+		coordinator.submit(secondPrepared, secondAnswers)
+
+		gateway.invocationKeys shouldContainExactly listOf(IDEMPOTENCY_ONE, IDEMPOTENCY_TWO)
+		gateway.invocationAnswers shouldContainExactly listOf(firstAnswers.answers(), secondAnswers.answers())
 	}
 
 	test("prepare is suppressed while an invocation is in flight") {
@@ -248,6 +282,7 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 private class FakeGateway : CanopyGateway {
 	val calls = mutableListOf<String>()
 	val invocationKeys = mutableListOf<UUID>()
+	val invocationAnswers = mutableListOf<List<CanopyAnswer>>()
 	var discovery: CanopyCallResult<CanopyDiscovery> = CanopyCallResult.Success(CanopyDiscovery(1, 1))
 	var negotiation: CanopyCallResult<CanopyNegotiation> = CanopyCallResult.Success(CanopyNegotiation(true, 1, 1, 1))
 	var resolve: suspend (UUID) -> CanopyCallResult<CanopyResolvedSurface> = { CanopyCallResult.Success(surface("Use action")) }
@@ -287,6 +322,7 @@ private class FakeGateway : CanopyGateway {
 	): CanopyCallResult<CanopyActionResult> {
 		calls += "invoke"
 		invocationKeys += idempotencyKey
+		invocationAnswers += answers.toList()
 		return invokeResponse(preparedAction, idempotencyKey, answers)
 	}
 }

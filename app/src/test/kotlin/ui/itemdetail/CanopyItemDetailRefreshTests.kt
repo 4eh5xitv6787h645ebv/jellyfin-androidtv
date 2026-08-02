@@ -44,4 +44,25 @@ class CanopyItemDetailRefreshTests : FunSpec({
 		button.contentDescription shouldBe "Label. Bounded description"
 		GridButton(2, "Default label").contentDescription shouldBe "Default label"
 	}
+
+	test("submission interaction locks fields permanently and enables only an exact retry") {
+		val submitting = CanopyFormInteractionState.EDITING.submitting()
+		submitting.formEditable shouldBe false
+		submitting.submitEnabled shouldBe false
+
+		val retry = submitting.failed()
+		retry.formEditable shouldBe false
+		retry.submitEnabled shouldBe true
+		retry.submitting() shouldBe CanopyFormInteractionState.SUBMITTING
+	}
+
+	test("status-only row content is descriptive and explicitly non-interactive") {
+		val status = CanopyStatusText("Spoiler guard active")
+
+		status.text shouldBe "Spoiler guard active"
+		status.contentDescription shouldBe "Spoiler guard active"
+		status.focusable shouldBe false
+		status.consumesClick shouldBe false
+		((status as Any) is GridButton) shouldBe false
+	}
 })
