@@ -1,0 +1,11 @@
+{
+  "Outcome": "succeeded",
+  "Message": {
+    "Text": "Applied",
+    "Tone": "positive"
+  },
+  "Refresh": {
+    "CatalogRevision": "revision-8",
+    "Targets": ["jellyfin_item", "item_detail_surface", "future_target"]
+  }
+}

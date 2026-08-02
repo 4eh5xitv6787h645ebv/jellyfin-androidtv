@@ -1,0 +1,26 @@
+{
+  "CatalogRevision": "revision-7",
+  "Contributions": [
+    {
+      "Id": "action-1",
+      "Kind": "action",
+      "Label": "Apply choice",
+      "Description": "A generic action",
+      "SemanticIcon": "future_icon",
+      "Enabled": true,
+      "PrepareHandle": "opaque-prepare-handle"
+    },
+    {
+      "Id": "status-1",
+      "Kind": "status",
+      "Label": "Ready",
+      "Tone": "future_tone"
+    },
+    {
+      "Kind": "future_contribution",
+      "FutureShape": {
+        "Any": "value"
+      }
+    }
+  ]
+}

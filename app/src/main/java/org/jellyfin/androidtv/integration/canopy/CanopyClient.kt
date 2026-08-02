@@ -1,0 +1,278 @@
+package org.jellyfin.androidtv.integration.canopy
+
+import java.nio.charset.CharacterCodingException
+import java.util.Locale
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.HttpMethod
+
+internal data class CanopyHttpResponse(
+	val status: Int,
+	val body: ByteArray,
+	val headers: Map<String, List<String>>,
+)
+
+internal fun interface CanopyTransport {
+	suspend fun request(
+		method: HttpMethod,
+		path: String,
+		query: Map<String, Any>,
+		body: JsonElement?,
+	): CanopyHttpResponse
+}
+
+internal class ApiClientCanopyTransport(
+	private val apiClient: ApiClient,
+) : CanopyTransport {
+	override suspend fun request(
+		method: HttpMethod,
+		path: String,
+		query: Map<String, Any>,
+		body: JsonElement?,
+	): CanopyHttpResponse {
+		val response = apiClient.request(method, path, emptyMap(), query, body)
+		return CanopyHttpResponse(response.status, response.body, response.headers)
+	}
+}
+
+/**
+ * Feature-neutral client for the bounded native item-detail contract.
+ *
+ * It deliberately uses the session-bound Jellyfin [ApiClient] rather than owning
+ * a second HTTP or authentication stack. It also never accepts a URL, provider
+ * operation, acting user, or access token from a caller.
+ */
+class CanopyClient internal constructor(
+	private val transport: CanopyTransport,
+	private val json: Json = Json {
+		ignoreUnknownKeys = true
+		explicitNulls = false
+	},
+) {
+	constructor(apiClient: ApiClient) : this(ApiClientCanopyTransport(apiClient))
+
+	suspend fun discover(): CanopyCallResult<CanopyDiscovery> {
+		val result = get<CanopyDiscoveryWire, CanopyDiscoveryWire>(
+			path = DISCOVERY_PATH,
+			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			mapper = { it },
+		)
+		return when (result) {
+			is CanopyCallResult.Success -> if (!result.value.available) {
+				CanopyCallResult.Absent
+			} else {
+				try {
+					CanopyCallResult.Success(CanopyContractMapper.discovery(result.value), result.etag)
+				} catch (_: CanopyContractException) {
+					invalidResponse(200)
+				}
+			}
+			CanopyCallResult.Absent -> CanopyCallResult.Absent
+			CanopyCallResult.Unauthorized -> CanopyCallResult.Unauthorized
+			CanopyCallResult.Forbidden -> CanopyCallResult.Forbidden
+			is CanopyCallResult.Failure -> result
+		}
+	}
+
+	suspend fun negotiate(
+		protocolMinimum: Int = PROTOCOL_VERSION,
+		protocolMaximum: Int = PROTOCOL_VERSION,
+	): CanopyCallResult<CanopyNegotiation> {
+		if (protocolMinimum <= 0 || protocolMaximum < protocolMinimum) {
+			return invalidResponse()
+		}
+		return get(
+			path = NEGOTIATE_PATH,
+			query = mapOf(
+				"protocolMinimum" to protocolMinimum,
+				"protocolMaximum" to protocolMaximum,
+			),
+			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			mapper = { wire: CanopyNegotiationWire ->
+				CanopyContractMapper.negotiation(wire).also { negotiation ->
+					if (negotiation.compatible && negotiation.protocol !in protocolMinimum..protocolMaximum) {
+						throw CanopyContractException(message = "Negotiated protocol was outside the client range")
+					}
+				}
+			},
+		)
+	}
+
+	suspend fun resolveItemDetail(
+		itemId: UUID,
+		locale: Locale = Locale.getDefault(),
+	): CanopyCallResult<CanopyResolvedSurface> {
+		val request = CanopyResolveRequestWire(
+			protocol = PROTOCOL_VERSION,
+			surfaceSchema = ITEM_DETAIL_SCHEMA,
+			item = CanopyItemReferenceWire(itemId.toString().lowercase(Locale.ROOT)),
+			client = CanopyClientCapabilitiesWire(
+				contributionKinds = listOf("action", "status"),
+				fieldKinds = listOf("confirmation", "boolean", "single_select", "multi_select"),
+				inputModes = listOf("dpad"),
+				accessibility = listOf("screen_reader"),
+				locale = locale.toLanguageTag(),
+			),
+		)
+		return post(
+			path = RESOLVE_PATH,
+			request = json.encodeToJsonElement(request),
+			maximumBytes = CanopyContractBounds.MAX_RESOLVE_BYTES,
+			mapper = CanopyContractMapper::resolvedSurface,
+		)
+	}
+
+	suspend fun prepare(prepareHandle: String): CanopyCallResult<CanopyPreparedAction> {
+		val checkedHandle = try {
+			CanopyContractMapper.prepareHandle(prepareHandle)
+		} catch (_: CanopyContractException) {
+			return invalidResponse()
+		}
+		return post(
+			path = PREPARE_PATH,
+			request = json.encodeToJsonElement(CanopyPrepareRequestWire(checkedHandle)),
+			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			mapper = CanopyContractMapper::preparedAction,
+		)
+	}
+
+	suspend fun invoke(
+		capability: String,
+		idempotencyKey: UUID,
+		answers: List<CanopyAnswer>,
+	): CanopyCallResult<CanopyActionResult> {
+		val request = try {
+			CanopyContractMapper.invokeRequest(capability, idempotencyKey.toString(), answers)
+		} catch (_: CanopyContractException) {
+			return invalidResponse()
+		}
+		return post(
+			path = INVOKE_PATH,
+			request = json.encodeToJsonElement(request),
+			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			mapper = CanopyContractMapper::invokeResult,
+		)
+	}
+
+	private suspend inline fun <reified W, T> get(
+		path: String,
+		query: Map<String, Any> = emptyMap(),
+		maximumBytes: Int,
+		crossinline mapper: (W) -> T,
+	): CanopyCallResult<T> = execute(HttpMethod.GET, path, query, null, maximumBytes, mapper)
+
+	private suspend inline fun <reified W, T> post(
+		path: String,
+		request: JsonElement,
+		maximumBytes: Int,
+		crossinline mapper: (W) -> T,
+	): CanopyCallResult<T> = execute(HttpMethod.POST, path, emptyMap(), request, maximumBytes, mapper)
+
+	private suspend inline fun <reified W, T> execute(
+		method: HttpMethod,
+		path: String,
+		query: Map<String, Any>,
+		body: JsonElement?,
+		maximumBytes: Int,
+		crossinline mapper: (W) -> T,
+	): CanopyCallResult<T> {
+		val response = try {
+			transport.request(method, path, query, body)
+		} catch (error: CancellationException) {
+			throw error
+		} catch (_: Exception) {
+			return CanopyCallResult.Failure(CanopyFailureKind.TRANSPORT)
+		}
+
+		if (response.status == 401) return CanopyCallResult.Unauthorized
+		if (response.status == 403) return CanopyCallResult.Forbidden
+		if (response.status == 404 && response.body.isEmpty()) return CanopyCallResult.Absent
+		if (response.body.size > maximumBytes) {
+			return CanopyCallResult.Failure(CanopyFailureKind.RESPONSE_TOO_LARGE, response.status)
+		}
+		if (response.status !in 200..299) return failure(response)
+		if (response.body.isEmpty()) return invalidResponse(response.status)
+		val responseText = try {
+			response.body.decodeToString(throwOnInvalidSequence = true)
+		} catch (_: CharacterCodingException) {
+			return invalidResponse(response.status)
+		}
+		if (!responseText.hasBoundedJsonNesting()) return invalidResponse(response.status)
+
+		return try {
+			val wire = json.decodeFromString<W>(responseText)
+			CanopyCallResult.Success(mapper(wire), response.etag())
+		} catch (error: CanopyContractException) {
+			CanopyCallResult.Failure(
+				kind = if (error.unsupported) CanopyFailureKind.UNSUPPORTED_CONTRACT else CanopyFailureKind.INVALID_RESPONSE,
+				status = response.status,
+			)
+		} catch (_: SerializationException) {
+			invalidResponse(response.status)
+		} catch (_: IllegalArgumentException) {
+			invalidResponse(response.status)
+		}
+	}
+
+	private fun failure(response: CanopyHttpResponse): CanopyCallResult.Failure {
+		val error = runCatching {
+			response.body.decodeToString(throwOnInvalidSequence = true)
+		}.getOrNull()
+			?.takeIf { it.hasBoundedJsonNesting() }
+			?.let {
+				try {
+					CanopyContractMapper.platformError(json.decodeFromString<CanopyErrorWire>(it))
+				} catch (_: RuntimeException) {
+					null
+				}
+			}
+		return CanopyCallResult.Failure(CanopyFailureKind.HTTP, response.status, error)
+	}
+
+	private fun String.hasBoundedJsonNesting(): Boolean {
+		var depth = 0
+		var inString = false
+		var escaped = false
+		for (character in this) {
+			if (inString) {
+				when {
+					escaped -> escaped = false
+					character == '\\' -> escaped = true
+					character == '"' -> inString = false
+				}
+			} else {
+				when (character) {
+					'"' -> inString = true
+					'{', '[' -> if (++depth > MAX_JSON_DEPTH) return false
+					'}', ']' -> if (--depth < 0) return false
+				}
+			}
+		}
+		return depth == 0 && !inString
+	}
+
+	private fun invalidResponse(status: Int? = null) =
+		CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, status)
+
+	private fun CanopyHttpResponse.etag(): String? = headers.entries
+		.firstOrNull { (name) -> name.equals("ETag", ignoreCase = true) }
+		?.value
+		?.firstOrNull()
+
+	private companion object {
+		const val MAX_JSON_DEPTH = 8
+		const val PROTOCOL_VERSION = 1
+		const val ITEM_DETAIL_SCHEMA = 1
+		const val PREFIX = "/JellyfinCanopy/Platform/v1"
+		const val DISCOVERY_PATH = "$PREFIX/discovery"
+		const val NEGOTIATE_PATH = "$PREFIX/negotiate"
+		const val RESOLVE_PATH = "$PREFIX/surfaces/item-detail/resolve"
+		const val PREPARE_PATH = "$PREFIX/actions/prepare"
+		const val INVOKE_PATH = "$PREFIX/actions/invoke"
+	}
+}
