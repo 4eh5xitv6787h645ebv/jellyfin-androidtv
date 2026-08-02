@@ -163,7 +163,7 @@ internal object CanopyDuplicateKeyGuard {
 		private fun invalid(): Nothing = throw InvalidJson
 	}
 
-	private object InvalidJson : RuntimeException(null, null, false, false)
+	private object InvalidJson : RuntimeException()
 
 	private const val MAX_DEPTH = 8
 	private const val CONTROL_CHARACTER_LIMIT = 0x20
