@@ -8,6 +8,7 @@ internal object CanopyContractBounds {
 	const val MAX_CONTRIBUTIONS = 16
 	const val MAX_FIELDS = 8
 	const val MAX_OPTIONS = 32
+	const val MAX_REFRESH_TARGETS = 8
 	const val MAX_ID_BYTES = 128
 	const val MAX_LABEL_BYTES = 96
 	const val MAX_TEXT_BYTES = 512
@@ -63,10 +64,11 @@ internal object CanopyContractMapper {
 		requireText(wire.cancelLabel, CanopyContractBounds.MAX_LABEL_BYTES, "Cancel label")
 		requireContract(wire.fields.size <= CanopyContractBounds.MAX_FIELDS, "Too many action fields")
 
+		requireContract(CANONICAL_UTC_INSTANT.matches(wire.expiresAtUtc), "Capability expiry was not canonical UTC")
 		val expiresAt = try {
 			Instant.parse(wire.expiresAtUtc)
 		} catch (_: RuntimeException) {
-			throw CanopyContractException(message = "Capability expiry was not RFC 3339")
+			throw CanopyContractException(message = "Capability expiry was not canonical UTC")
 		}
 
 		val ids = mutableSetOf<String>()
@@ -75,7 +77,7 @@ internal object CanopyContractMapper {
 			mapField(field)
 		}
 		return CanopyPreparedAction(
-			capability = wire.capability,
+			capability = CanopyCapability(wire.capability),
 			expiresAt = expiresAt,
 			title = wire.title,
 			submitLabel = wire.submitLabel,
@@ -94,6 +96,10 @@ internal object CanopyContractMapper {
 			CanopyMessage(it.text, tone(it.tone))
 		}
 		wire.refresh?.catalogRevision?.let { requireText(it, CanopyContractBounds.MAX_ID_BYTES, "Catalog revision") }
+		requireContract(
+			wire.refresh?.targets.orEmpty().size <= CanopyContractBounds.MAX_REFRESH_TARGETS,
+			"Too many refresh targets",
+		)
 		val refreshTargets = wire.refresh?.targets.orEmpty().mapNotNullTo(mutableSetOf()) {
 			when (it) {
 				"jellyfin_item" -> CanopyRefreshTarget.JELLYFIN_ITEM
@@ -112,36 +118,70 @@ internal object CanopyContractMapper {
 		return CanopyPlatformError(wire.code, wire.message, wire.retryable, wire.correlationId)
 	}
 
-	fun prepareHandle(value: String): String = value.apply {
-		requireText(this, CanopyContractBounds.MAX_OPAQUE_BYTES, "Prepare handle")
+	fun prepareHandle(value: String): CanopyPrepareHandle = value.let {
+		requireText(it, CanopyContractBounds.MAX_OPAQUE_BYTES, "Prepare handle")
+		CanopyPrepareHandle(it)
 	}
 
-	fun invokeRequest(capability: String, idempotencyKey: String, answers: List<CanopyAnswer>): CanopyInvokeRequestWire {
+	fun invokeRequest(
+		preparedAction: CanopyPreparedAction,
+		idempotencyKey: String,
+		answers: List<CanopyAnswer>,
+	): CanopyInvokeRequestWire {
+		val capability = preparedAction.capability.wireValue()
 		requireText(capability, CanopyContractBounds.MAX_OPAQUE_BYTES, "Capability")
 		requireText(idempotencyKey, CanopyContractBounds.MAX_ID_BYTES, "Idempotency key")
 		requireContract(answers.size <= CanopyContractBounds.MAX_FIELDS, "Too many answers")
-		val fieldIds = mutableSetOf<String>()
+		val fieldsById = preparedAction.fields.associateBy { it.id }
+		requireContract(fieldsById.size == preparedAction.fields.size, "Prepared action had duplicate field ids")
+		val answeredFieldIds = mutableSetOf<String>()
 		val mapped = answers.map { answer ->
-			requireContract(fieldIds.add(answer.fieldId), "Duplicate answer field id")
-			this.answer(answer)
+			val fieldId = answer.fieldId.checkedId()
+			requireContract(answeredFieldIds.add(fieldId), "Duplicate answer field id")
+			val field = fieldsById[fieldId]
+				?: throw CanopyContractException(message = "Answer referenced an unknown field")
+			this.answer(field, answer, fieldId)
 		}
+		requireContract(
+			preparedAction.fields.none { it.required && it.id !in answeredFieldIds },
+			"A required field was unanswered",
+		)
 		return CanopyInvokeRequestWire(capability, idempotencyKey, mapped)
 	}
 
-	fun answer(answer: CanopyAnswer): CanopyAnswerWire = when (answer) {
-		is CanopyAnswer.Confirmation -> CanopyAnswerWire(answer.fieldId.checkedId(), booleanValue = answer.checked)
-		is CanopyAnswer.BooleanValue -> CanopyAnswerWire(answer.fieldId.checkedId(), booleanValue = answer.checked)
-		is CanopyAnswer.SingleSelect -> CanopyAnswerWire(
-			fieldId = answer.fieldId.checkedId(),
-			optionIds = listOf(answer.optionId.checkedId()),
-		)
-		is CanopyAnswer.MultiSelect -> {
-			requireContract(answer.optionIds.size <= CanopyContractBounds.MAX_OPTIONS, "Too many selected options")
-			CanopyAnswerWire(
-				fieldId = answer.fieldId.checkedId(),
-				optionIds = answer.optionIds.map { it.checkedId() }.sorted(),
-			)
+	private fun answer(field: CanopyField, answer: CanopyAnswer, fieldId: String): CanopyAnswerWire = when {
+		field is CanopyField.Confirmation && answer is CanopyAnswer.Confirmation -> {
+			requireContract(!field.required || answer.checked, "Required confirmation was not accepted")
+			CanopyAnswerWire(fieldId, booleanValue = answer.checked)
 		}
+		field is CanopyField.BooleanValue && answer is CanopyAnswer.BooleanValue ->
+			CanopyAnswerWire(fieldId, booleanValue = answer.checked)
+		field is CanopyField.SingleSelect && answer is CanopyAnswer.SingleSelect -> {
+			val optionId = answer.optionId.checkedId()
+			requireEnabledOptions(field.options, listOf(optionId))
+			CanopyAnswerWire(fieldId, optionIds = listOf(optionId))
+		}
+		field is CanopyField.MultiSelect && answer is CanopyAnswer.MultiSelect -> {
+			requireContract(answer.optionIds.size <= CanopyContractBounds.MAX_OPTIONS, "Too many selected options")
+			val optionIds = answer.optionIds.map { it.checkedId() }
+			requireContract(optionIds.distinct().size == optionIds.size, "Selected options were duplicated")
+			requireContract(
+				optionIds.size in field.minimumSelections..field.maximumSelections,
+				"Selected options violated field cardinality",
+			)
+			requireEnabledOptions(field.options, optionIds)
+			CanopyAnswerWire(fieldId, optionIds = optionIds.sorted())
+		}
+		else -> throw CanopyContractException(message = "Answer kind did not match its field")
+	}
+
+	private fun requireEnabledOptions(options: List<CanopyOption>, selectedIds: List<String>) {
+		val optionsById = options.associateBy { it.id }
+		requireContract(optionsById.size == options.size, "Field options were duplicated")
+		requireContract(
+			selectedIds.all { optionId -> optionsById[optionId]?.disabled == false },
+			"Answer selected an unknown or disabled option",
+		)
 	}
 
 	private fun mapAction(wire: CanopyContributionWire): CanopyContribution.Action? = runCatching {
@@ -154,7 +194,7 @@ internal object CanopyContractMapper {
 			description = wire.description.checkedDescription(),
 			icon = icon(wire.semanticIcon),
 			enabled = enabled,
-			prepareHandle = wire.prepareHandle?.takeIf { it.isNotBlank() },
+			prepareHandle = wire.prepareHandle?.takeIf { it.isNotBlank() }?.let(::CanopyPrepareHandle),
 		)
 	}.getOrNull()
 
@@ -184,15 +224,25 @@ internal object CanopyContractMapper {
 				requireContract(options.isNotEmpty(), "Single-select field had no options")
 				requireContract(wire.defaultOptionIds.size <= 1, "Single-select field had multiple defaults")
 				val default = wire.defaultOptionIds.singleOrNull()
-				requireContract(default == null || options.any { it.id == default }, "Single-select default was not an option")
+				requireContract(
+					default == null || options.any { it.id == default && !it.disabled },
+					"Single-select default was not an enabled option",
+				)
 				CanopyField.SingleSelect(id, label, description, wire.required, options, default)
 			}
 			"multi_select" -> {
 				val options = mapOptions(wire.options)
 				requireContract(options.isNotEmpty(), "Multi-select field had no options")
+				requireContract(
+					wire.defaultOptionIds.size <= CanopyContractBounds.MAX_OPTIONS,
+					"Too many multi-select defaults",
+				)
 				val defaults = wire.defaultOptionIds.toSet()
 				requireContract(defaults.size == wire.defaultOptionIds.size, "Multi-select defaults were duplicated")
-				requireContract(defaults.all { default -> options.any { it.id == default } }, "Multi-select default was not an option")
+				requireContract(
+					defaults.all { default -> options.any { it.id == default && !it.disabled } },
+					"Multi-select default was not an enabled option",
+				)
 				val minimum = wire.minimumSelections ?: 0
 				val maximum = wire.maximumSelections ?: options.size
 				requireContract(minimum >= 0 && maximum >= minimum && maximum <= options.size, "Invalid multi-select range")
@@ -248,4 +298,8 @@ internal object CanopyContractMapper {
 	private fun requireContract(condition: Boolean, message: String) {
 		if (!condition) throw CanopyContractException(message = message)
 	}
+
+	private val CANONICAL_UTC_INSTANT = Regex(
+		"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,7})?(?:Z|\\+00:00)$",
+	)
 }

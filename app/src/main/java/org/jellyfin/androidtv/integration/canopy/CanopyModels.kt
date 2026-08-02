@@ -2,24 +2,24 @@ package org.jellyfin.androidtv.integration.canopy
 
 import java.time.Instant
 
-data class CanopyDiscovery(
+internal data class CanopyDiscovery(
 	val protocolMinimum: Int,
 	val protocolMaximum: Int,
 )
 
-data class CanopyNegotiation(
+internal data class CanopyNegotiation(
 	val compatible: Boolean,
 	val protocol: Int?,
 	val hostProtocolMinimum: Int,
 	val hostProtocolMaximum: Int,
 )
 
-data class CanopyResolvedSurface(
+internal data class CanopyResolvedSurface(
 	val catalogRevision: String,
 	val contributions: List<CanopyContribution>,
 )
 
-sealed interface CanopyContribution {
+internal sealed interface CanopyContribution {
 	val id: String
 	val label: String
 
@@ -29,7 +29,7 @@ sealed interface CanopyContribution {
 		val description: String?,
 		val icon: CanopySemanticIcon,
 		val enabled: Boolean,
-		val prepareHandle: String?,
+		val prepareHandle: CanopyPrepareHandle?,
 	) : CanopyContribution
 
 	data class Status(
@@ -39,7 +39,7 @@ sealed interface CanopyContribution {
 	) : CanopyContribution
 }
 
-enum class CanopySemanticIcon {
+internal enum class CanopySemanticIcon {
 	DEFAULT,
 	SHIELD,
 	VISIBILITY_OFF,
@@ -48,15 +48,15 @@ enum class CanopySemanticIcon {
 	SETTINGS,
 }
 
-enum class CanopyTone {
+internal enum class CanopyTone {
 	NEUTRAL,
 	POSITIVE,
 	WARNING,
 	NEGATIVE,
 }
 
-data class CanopyPreparedAction(
-	val capability: String,
+internal data class CanopyPreparedAction(
+	val capability: CanopyCapability,
 	val expiresAt: Instant,
 	val title: String,
 	val submitLabel: String,
@@ -64,7 +64,7 @@ data class CanopyPreparedAction(
 	val fields: List<CanopyField>,
 )
 
-sealed interface CanopyField {
+internal sealed interface CanopyField {
 	val id: String
 	val label: String
 	val description: String?
@@ -107,51 +107,51 @@ sealed interface CanopyField {
 	) : CanopyField
 }
 
-data class CanopyOption(
+internal data class CanopyOption(
 	val id: String,
 	val label: String,
 	val description: String?,
 	val disabled: Boolean,
 )
 
-sealed interface CanopyAnswer {
+internal sealed interface CanopyAnswer {
 	val fieldId: String
 
 	data class Confirmation(override val fieldId: String, val checked: Boolean) : CanopyAnswer
 	data class BooleanValue(override val fieldId: String, val checked: Boolean) : CanopyAnswer
 	data class SingleSelect(override val fieldId: String, val optionId: String) : CanopyAnswer
-	data class MultiSelect(override val fieldId: String, val optionIds: Set<String>) : CanopyAnswer
+	data class MultiSelect(override val fieldId: String, val optionIds: List<String>) : CanopyAnswer
 }
 
-data class CanopyActionResult(
+internal data class CanopyActionResult(
 	val outcome: CanopyActionOutcome,
 	val message: CanopyMessage?,
 	val catalogRevision: String?,
 	val refreshTargets: Set<CanopyRefreshTarget>,
 )
 
-enum class CanopyActionOutcome {
+internal enum class CanopyActionOutcome {
 	SUCCEEDED,
 }
 
-data class CanopyMessage(
+internal data class CanopyMessage(
 	val text: String,
 	val tone: CanopyTone,
 )
 
-enum class CanopyRefreshTarget {
+internal enum class CanopyRefreshTarget {
 	JELLYFIN_ITEM,
 	ITEM_DETAIL_SURFACE,
 }
 
-data class CanopyPlatformError(
+internal data class CanopyPlatformError(
 	val code: String,
 	val message: String,
 	val retryable: Boolean,
 	val correlationId: String,
 )
 
-sealed interface CanopyCallResult<out T> {
+internal sealed interface CanopyCallResult<out T> {
 	data class Success<T>(
 		val value: T,
 		val etag: String? = null,
@@ -168,10 +168,30 @@ sealed interface CanopyCallResult<out T> {
 	) : CanopyCallResult<Nothing>
 }
 
-enum class CanopyFailureKind {
+internal enum class CanopyFailureKind {
 	TRANSPORT,
 	HTTP,
 	INVALID_RESPONSE,
-	RESPONSE_TOO_LARGE,
+	BUFFERED_RESPONSE_TOO_LARGE,
 	UNSUPPORTED_CONTRACT,
+}
+
+internal class CanopyPrepareHandle internal constructor(
+	private val value: String,
+) {
+	internal fun wireValue(): String = value
+
+	override fun equals(other: Any?): Boolean = other is CanopyPrepareHandle && value == other.value
+	override fun hashCode(): Int = value.hashCode()
+	override fun toString(): String = "CanopyPrepareHandle(<redacted>)"
+}
+
+internal class CanopyCapability internal constructor(
+	private val value: String,
+) {
+	internal fun wireValue(): String = value
+
+	override fun equals(other: Any?): Boolean = other is CanopyCapability && value == other.value
+	override fun hashCode(): Int = value.hashCode()
+	override fun toString(): String = "CanopyCapability(<redacted>)"
 }

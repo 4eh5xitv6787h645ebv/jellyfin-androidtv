@@ -10,11 +10,24 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpMethod
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
+
+internal enum class CanopyBodyReadMode {
+	/** Jellyfin SDK 1.8.x materialized the complete body before Canopy could inspect its size. */
+	SDK_BUFFERED_BEFORE_LIMIT_CHECK,
+
+	/** The SDK reported a non-success status without exposing its response body. */
+	SDK_STATUS_ONLY,
+
+	/** Reserved for a future ApiClient response API that enforces its cap while reading. */
+	BOUNDED_DURING_READ,
+}
 
 internal data class CanopyHttpResponse(
 	val status: Int,
 	val body: ByteArray,
 	val headers: Map<String, List<String>>,
+	val bodyReadMode: CanopyBodyReadMode,
 )
 
 internal fun interface CanopyTransport {
@@ -23,6 +36,7 @@ internal fun interface CanopyTransport {
 		path: String,
 		query: Map<String, Any>,
 		body: JsonElement?,
+		maximumResponseBytes: Int,
 	): CanopyHttpResponse
 }
 
@@ -34,20 +48,43 @@ internal class ApiClientCanopyTransport(
 		path: String,
 		query: Map<String, Any>,
 		body: JsonElement?,
+		maximumResponseBytes: Int,
 	): CanopyHttpResponse {
-		val response = apiClient.request(method, path, emptyMap(), query, body)
-		return CanopyHttpResponse(response.status, response.body, response.headers)
+		// SDK 1.8.12 has no bounded response API: request() calls ResponseBody.bytes().
+		// The smallest safe SDK seam is an ApiClient request overload accepting a
+		// maximumResponseBytes value and enforcing it while reading the response source.
+		// That seam should also preserve status, headers, and the bounded body for non-2xx.
+		return try {
+			val response = apiClient.request(method, path, emptyMap(), query, body)
+			CanopyHttpResponse(
+				status = response.status,
+				body = response.body,
+				headers = response.headers,
+				bodyReadMode = CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK,
+			)
+		} catch (error: InvalidStatusException) {
+			CanopyHttpResponse(
+				status = error.status,
+				body = byteArrayOf(),
+				headers = emptyMap(),
+				bodyReadMode = CanopyBodyReadMode.SDK_STATUS_ONLY,
+			)
+		}
 	}
 }
 
 /**
- * Feature-neutral client for the bounded native item-detail contract.
+ * Feature-neutral client for the size-rejecting native item-detail contract.
  *
  * It deliberately uses the session-bound Jellyfin [ApiClient] rather than owning
  * a second HTTP or authentication stack. It also never accepts a URL, provider
  * operation, acting user, or access token from a caller.
+ *
+ * Contract byte limits are checked before decoding, but SDK 1.8.x has already
+ * buffered successful bodies at that point. [CanopyBodyReadMode] makes this
+ * allocation limitation explicit until the SDK exposes a bounded read seam.
  */
-class CanopyClient internal constructor(
+internal class CanopyClient internal constructor(
 	private val transport: CanopyTransport,
 	private val json: Json = Json {
 		ignoreUnknownKeys = true
@@ -60,6 +97,7 @@ class CanopyClient internal constructor(
 		val result = get<CanopyDiscoveryWire, CanopyDiscoveryWire>(
 			path = DISCOVERY_PATH,
 			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			emptyNotFoundIsAbsent = true,
 			mapper = { it },
 		)
 		return when (result) {
@@ -69,7 +107,7 @@ class CanopyClient internal constructor(
 				try {
 					CanopyCallResult.Success(CanopyContractMapper.discovery(result.value), result.etag)
 				} catch (_: CanopyContractException) {
-					invalidResponse(200)
+					invalidResponse(HTTP_OK)
 				}
 			}
 			CanopyCallResult.Absent -> CanopyCallResult.Absent
@@ -127,27 +165,22 @@ class CanopyClient internal constructor(
 		)
 	}
 
-	suspend fun prepare(prepareHandle: String): CanopyCallResult<CanopyPreparedAction> {
-		val checkedHandle = try {
-			CanopyContractMapper.prepareHandle(prepareHandle)
-		} catch (_: CanopyContractException) {
-			return invalidResponse()
-		}
+	suspend fun prepare(prepareHandle: CanopyPrepareHandle): CanopyCallResult<CanopyPreparedAction> {
 		return post(
 			path = PREPARE_PATH,
-			request = json.encodeToJsonElement(CanopyPrepareRequestWire(checkedHandle)),
+			request = json.encodeToJsonElement(CanopyPrepareRequestWire(prepareHandle.wireValue())),
 			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
 			mapper = CanopyContractMapper::preparedAction,
 		)
 	}
 
 	suspend fun invoke(
-		capability: String,
+		preparedAction: CanopyPreparedAction,
 		idempotencyKey: UUID,
 		answers: List<CanopyAnswer>,
 	): CanopyCallResult<CanopyActionResult> {
 		val request = try {
-			CanopyContractMapper.invokeRequest(capability, idempotencyKey.toString(), answers)
+			CanopyContractMapper.invokeRequest(preparedAction, idempotencyKey.toString(), answers)
 		} catch (_: CanopyContractException) {
 			return invalidResponse()
 		}
@@ -163,15 +196,24 @@ class CanopyClient internal constructor(
 		path: String,
 		query: Map<String, Any> = emptyMap(),
 		maximumBytes: Int,
+		emptyNotFoundIsAbsent: Boolean = false,
 		crossinline mapper: (W) -> T,
-	): CanopyCallResult<T> = execute(HttpMethod.GET, path, query, null, maximumBytes, mapper)
+	): CanopyCallResult<T> = execute(
+		HttpMethod.GET,
+		path,
+		query,
+		null,
+		maximumBytes,
+		emptyNotFoundIsAbsent,
+		mapper,
+	)
 
 	private suspend inline fun <reified W, T> post(
 		path: String,
 		request: JsonElement,
 		maximumBytes: Int,
 		crossinline mapper: (W) -> T,
-	): CanopyCallResult<T> = execute(HttpMethod.POST, path, emptyMap(), request, maximumBytes, mapper)
+	): CanopyCallResult<T> = execute(HttpMethod.POST, path, emptyMap(), request, maximumBytes, false, mapper)
 
 	private suspend inline fun <reified W, T> execute(
 		method: HttpMethod,
@@ -179,24 +221,34 @@ class CanopyClient internal constructor(
 		query: Map<String, Any>,
 		body: JsonElement?,
 		maximumBytes: Int,
+		emptyNotFoundIsAbsent: Boolean,
 		crossinline mapper: (W) -> T,
 	): CanopyCallResult<T> {
 		val response = try {
-			transport.request(method, path, query, body)
+			transport.request(method, path, query, body, maximumBytes)
 		} catch (error: CancellationException) {
 			throw error
 		} catch (_: Exception) {
 			return CanopyCallResult.Failure(CanopyFailureKind.TRANSPORT)
 		}
 
-		if (response.status == 401) return CanopyCallResult.Unauthorized
-		if (response.status == 403) return CanopyCallResult.Forbidden
-		if (response.status == 404 && response.body.isEmpty()) return CanopyCallResult.Absent
-		if (response.body.size > maximumBytes) {
-			return CanopyCallResult.Failure(CanopyFailureKind.RESPONSE_TOO_LARGE, response.status)
+		if (response.status == HTTP_UNAUTHORIZED) return CanopyCallResult.Unauthorized
+		if (response.status == HTTP_FORBIDDEN) return CanopyCallResult.Forbidden
+		if (response.status == HTTP_NOT_FOUND && response.body.isEmpty() && emptyNotFoundIsAbsent) {
+			return CanopyCallResult.Absent
 		}
-		if (response.status !in 200..299) return failure(response)
+		if (response.body.size > maximumBytes) {
+			return CanopyCallResult.Failure(CanopyFailureKind.BUFFERED_RESPONSE_TOO_LARGE, response.status)
+		}
+		if (response.status != HTTP_OK) {
+			return if (response.status in HTTP_SUCCESS_MINIMUM..HTTP_SUCCESS_MAXIMUM) {
+				invalidResponse(response.status)
+			} else {
+				failure(response)
+			}
+		}
 		if (response.body.isEmpty()) return invalidResponse(response.status)
+		if (!response.hasJsonContentType()) return invalidResponse(response.status)
 		val responseText = try {
 			response.body.decodeToString(throwOnInvalidSequence = true)
 		} catch (_: CharacterCodingException) {
@@ -264,7 +316,21 @@ class CanopyClient internal constructor(
 		?.value
 		?.firstOrNull()
 
+	private fun CanopyHttpResponse.hasJsonContentType(): Boolean = headers.entries
+		.firstOrNull { (name) -> name.equals("Content-Type", ignoreCase = true) }
+		?.value
+		?.firstOrNull()
+		?.substringBefore(';')
+		?.trim()
+		?.equals("application/json", ignoreCase = true) == true
+
 	private companion object {
+		const val HTTP_OK = 200
+		const val HTTP_SUCCESS_MINIMUM = 200
+		const val HTTP_SUCCESS_MAXIMUM = 299
+		const val HTTP_UNAUTHORIZED = 401
+		const val HTTP_FORBIDDEN = 403
+		const val HTTP_NOT_FOUND = 404
 		const val MAX_JSON_DEPTH = 8
 		const val PROTOCOL_VERSION = 1
 		const val ITEM_DETAIL_SCHEMA = 1

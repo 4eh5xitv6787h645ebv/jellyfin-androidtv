@@ -1,16 +1,24 @@
 package org.jellyfin.androidtv.integration.canopy
 
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.maps.shouldContain
 import io.kotest.matchers.shouldBe
 import java.util.Locale
 import java.util.UUID
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpMethod
+import org.jellyfin.sdk.api.client.RawResponse
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 
 class CanopyClientTests : FunSpec({
 	test("discovery tolerates additive properties") {
@@ -20,11 +28,37 @@ class CanopyClientTests : FunSpec({
 		result shouldBe CanopyCallResult.Success(CanopyDiscovery(1, 1))
 		transport.lastRequest?.path shouldBe "/JellyfinCanopy/Platform/v1/discovery"
 		transport.lastRequest?.method shouldBe HttpMethod.GET
+		transport.lastRequest?.maximumResponseBytes shouldBe CanopyContractBounds.MAX_ACTION_BYTES
 	}
 
 	test("a platform reporting itself unavailable is absent") {
 		val unavailable = fixture("discovery.200.json").replace("\"Available\": true", "\"Available\": false")
 		CanopyClient(FixtureTransport(response(200, unavailable))).discover() shouldBe CanopyCallResult.Absent
+	}
+
+	test("ApiClient transport reuses the session client and passes JsonElement for SDK application json encoding") {
+		val apiClient = mockk<ApiClient>()
+		val payload = FIXTURE_JSON.parseToJsonElement("""{"PrepareHandle":"opaque"}""")
+		coEvery {
+			apiClient.request(HttpMethod.POST, "/bounded", emptyMap(), emptyMap(), payload)
+		} returns RawResponse("{}".encodeToByteArray(), 200, jsonHeaders())
+		val transport = ApiClientCanopyTransport(apiClient)
+
+		val result = transport.request(HttpMethod.POST, "/bounded", emptyMap(), payload, 32)
+
+		result.bodyReadMode shouldBe CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK
+		coVerify(exactly = 1) {
+			apiClient.request(HttpMethod.POST, "/bounded", emptyMap(), emptyMap(), payload)
+		}
+	}
+
+	test("ApiClient status exceptions retain status without becoming transport failures") {
+		val apiClient = mockk<ApiClient>()
+		coEvery {
+			apiClient.request(HttpMethod.GET, any(), emptyMap(), emptyMap(), null)
+		} throws InvalidStatusException(404)
+
+		CanopyClient(apiClient).discover() shouldBe CanopyCallResult.Absent
 	}
 
 	test("negotiation uses the existing authenticated GET contract") {
@@ -77,7 +111,7 @@ class CanopyClientTests : FunSpec({
 
 	test("prepare maps all four bounded field kinds") {
 		val transport = FixtureTransport(response(200, fixture("prepare.all-field-kinds.200.json")))
-		val result = CanopyClient(transport).prepare("opaque-prepare-handle")
+		val result = CanopyClient(transport).prepare(prepareHandle())
 
 		val action = (result as CanopyCallResult.Success).value
 		action.fields.map { it::class } shouldContainExactly listOf(
@@ -93,21 +127,78 @@ class CanopyClientTests : FunSpec({
 	test("an unknown field kind disables the prepared action") {
 		val fixture = fixture("prepare.all-field-kinds.200.json")
 			.replace("\"confirmation\"", "\"future_field\"")
-		val result = CanopyClient(FixtureTransport(response(200, fixture))).prepare("opaque-prepare-handle")
+		val result = CanopyClient(FixtureTransport(response(200, fixture))).prepare(prepareHandle())
 
 		result shouldBe CanopyCallResult.Failure(CanopyFailureKind.UNSUPPORTED_CONTRACT, 200)
+	}
+
+	test("prepare accepts only canonical UTC expiry values with up to seven fractional digits") {
+		val original = "2026-08-02T16:30:00Z"
+		listOf(
+			"2026-08-02T16:30:00Z",
+			"2026-08-02T16:30:00.1234567Z",
+			"2026-08-02T16:30:00+00:00",
+		).forEach { expiry ->
+			val body = fixture("prepare.all-field-kinds.200.json").replace(original, expiry)
+			val result = CanopyClient(FixtureTransport(response(200, body))).prepare(prepareHandle())
+			result::class shouldBe CanopyCallResult.Success::class
+		}
+	}
+
+	test("prepare rejects noncanonical expiry forms") {
+		val original = "2026-08-02T16:30:00Z"
+		listOf(
+			"2026-08-02 16:30:00Z",
+			"2026-08-02t16:30:00z",
+			"2026-08-02T16:30:00+01:00",
+			"2026-08-02T16:30:00.12345678Z",
+			"2026-08-02T16:30:00.123456789Z",
+		).forEach { expiry ->
+			val body = fixture("prepare.all-field-kinds.200.json").replace(original, expiry)
+			val result = CanopyClient(FixtureTransport(response(200, body))).prepare(prepareHandle())
+			result shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
+		}
+	}
+
+	test("multi-select defaults are count-bounded before set conversion") {
+		val defaults = (0..CanopyContractBounds.MAX_OPTIONS).joinToString(",") { "\"$it\"" }
+		val body = fixture("prepare.all-field-kinds.200.json")
+			.replace("\"DefaultOptionIds\": [\"x\"]", "\"DefaultOptionIds\": [$defaults]")
+		val result = CanopyClient(FixtureTransport(response(200, body))).prepare(prepareHandle())
+
+		result shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
+	}
+
+	test("opaque handles and capabilities redact string and generated data APIs") {
+		val handle = prepareHandle()
+		val capability = preparedAction().capability
+
+		handle.toString().contains("opaque-prepare-handle") shouldBe false
+		capability.toString().contains("opaque-invoke-capability") shouldBe false
+		listOf(handle::class.java, capability::class.java).forEach { type ->
+			type.declaredMethods.any { it.name == "copy" || it.name.startsWith("component") } shouldBe false
+		}
+	}
+
+	test("opaque handle bounds use UTF-8 bytes at the exact boundary") {
+		val exact = "é".repeat(CanopyContractBounds.MAX_OPAQUE_BYTES / 2)
+		CanopyContractMapper.prepareHandle(exact).wireValue() shouldBe exact
+		shouldThrow<CanopyContractException> {
+			CanopyContractMapper.prepareHandle(exact + "a")
+		}
 	}
 
 	test("invoke puts idempotency and typed answers in the JSON body") {
 		val transport = FixtureTransport(response(200, fixture("invoke.success.200.json")))
 		val idempotencyKey = UUID.fromString("9e30bb75-916e-48ac-984d-e65509cd2850")
 		val result = CanopyClient(transport).invoke(
-			capability = "opaque-invoke-capability",
+			preparedAction = preparedAction(),
 			idempotencyKey = idempotencyKey,
 			answers = listOf(
 				CanopyAnswer.Confirmation("confirm", true),
+				CanopyAnswer.BooleanValue("enabled", true),
 				CanopyAnswer.SingleSelect("quality", "a"),
-				CanopyAnswer.MultiSelect("targets", linkedSetOf("y", "x")),
+				CanopyAnswer.MultiSelect("targets", listOf("y", "x")),
 			),
 		)
 
@@ -118,11 +209,56 @@ class CanopyClientTests : FunSpec({
 		)
 		val body = transport.lastRequest!!.body!!.jsonObject
 		body["IdempotencyKey"]!!.jsonPrimitive.content shouldBe idempotencyKey.toString()
-		body["Answers"]!!.jsonArray.size shouldBe 3
-		val optionIds = body["Answers"]!!.jsonArray[2].jsonObject["OptionIds"]!!.jsonArray.map { it.jsonPrimitive.content }
+		body["Answers"]!!.jsonArray.size shouldBe 4
+		val optionIds = body["Answers"]!!.jsonArray[3].jsonObject["OptionIds"]!!.jsonArray.map { it.jsonPrimitive.content }
 		optionIds shouldContainExactly
 			listOf("x", "y")
 		transport.lastRequest?.path shouldBe "/JellyfinCanopy/Platform/v1/actions/invoke"
+	}
+
+	test("invoke rejects missing, mismatched, unknown, disabled, duplicate, and over-cardinality answers") {
+		val valid = requiredAnswers()
+		val invalidCases = listOf(
+			valid.filterNot { it.fieldId == "quality" },
+			valid.map { if (it.fieldId == "confirm") CanopyAnswer.BooleanValue("confirm", true) else it },
+			valid.map { if (it.fieldId == "confirm") CanopyAnswer.Confirmation("confirm", false) else it },
+			valid.map { if (it.fieldId == "quality") CanopyAnswer.SingleSelect("quality", "missing") else it },
+			valid.map { if (it.fieldId == "quality") CanopyAnswer.SingleSelect("quality", "b") else it },
+			valid + CanopyAnswer.BooleanValue("unknown", true),
+			valid + CanopyAnswer.Confirmation("confirm", false),
+			valid + CanopyAnswer.MultiSelect("targets", listOf("x", "x")),
+			valid + CanopyAnswer.MultiSelect("targets", listOf("x", "y", "z")),
+		)
+
+		invalidCases.forEach { answers ->
+			val transport = FixtureTransport(response(200, fixture("invoke.success.200.json")))
+			val result = CanopyClient(transport).invoke(preparedAction(), UUID.randomUUID(), answers)
+			result shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE)
+			transport.lastRequest shouldBe null
+		}
+	}
+
+	test("invoke accepts exact multi-select minimum and maximum cardinalities") {
+		listOf(emptyList(), listOf("x", "y")).forEach { selected ->
+			val answers = requiredAnswers() + CanopyAnswer.MultiSelect("targets", selected)
+			val result = CanopyClient(
+				FixtureTransport(response(200, fixture("invoke.success.200.json"))),
+			).invoke(preparedAction(), UUID.randomUUID(), answers)
+			result::class shouldBe CanopyCallResult.Success::class
+		}
+	}
+
+	test("refresh targets are explicitly count-bounded") {
+		val targets = (0..CanopyContractBounds.MAX_REFRESH_TARGETS).joinToString(",") { "\"future_$it\"" }
+		val body = fixture("invoke.success.200.json")
+			.replace("\"jellyfin_item\", \"item_detail_surface\", \"future_target\"", targets)
+		val result = CanopyClient(FixtureTransport(response(200, body))).invoke(
+			preparedAction(),
+			UUID.randomUUID(),
+			requiredAnswers(),
+		)
+
+		result shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
 	}
 
 	test("zero-byte authorization failures are never decoded") {
@@ -132,6 +268,28 @@ class CanopyClientTests : FunSpec({
 
 	test("a zero-byte 404 means the optional platform is absent") {
 		CanopyClient(FixtureTransport(response(404))).discover() shouldBe CanopyCallResult.Absent
+	}
+
+	test("zero-byte 404 is HTTP failure for negotiate resolve prepare and invoke") {
+		CanopyClient(FixtureTransport(response(404))).negotiate() shouldBe
+			CanopyCallResult.Failure(CanopyFailureKind.HTTP, 404)
+		CanopyClient(FixtureTransport(response(404))).resolveItemDetail(TEST_ITEM_ID) shouldBe
+			CanopyCallResult.Failure(CanopyFailureKind.HTTP, 404)
+		CanopyClient(FixtureTransport(response(404))).prepare(prepareHandle()) shouldBe
+			CanopyCallResult.Failure(CanopyFailureKind.HTTP, 404)
+		CanopyClient(FixtureTransport(response(404))).invoke(preparedAction(), UUID.randomUUID(), requiredAnswers()) shouldBe
+			CanopyCallResult.Failure(CanopyFailureKind.HTTP, 404)
+	}
+
+	test("success requires exact 200 and application json with optional parameters") {
+		CanopyClient(FixtureTransport(response(206, fixture("discovery.200.json")))).discover() shouldBe
+			CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 206)
+		CanopyClient(
+			FixtureTransport(response(200, fixture("discovery.200.json"), jsonHeaders("text/plain"))),
+		).discover() shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
+		CanopyClient(
+			FixtureTransport(response(200, fixture("discovery.200.json"), jsonHeaders("Application/JSON; charset=utf-8"))),
+		).discover() shouldBe CanopyCallResult.Success(CanopyDiscovery(1, 1))
 	}
 
 	test("a structured HTTP failure remains machine readable") {
@@ -148,10 +306,27 @@ class CanopyClientTests : FunSpec({
 		)
 	}
 
-	test("oversized bodies are rejected before JSON decoding") {
+	test("an oversized SDK-buffered body is rejected before JSON decoding but after allocation") {
 		val body = ByteArray(CanopyContractBounds.MAX_ACTION_BYTES + 1) { 'x'.code.toByte() }
-		val result = CanopyClient(FixtureTransport(CanopyHttpResponse(200, body, emptyMap()))).discover()
-		result shouldBe CanopyCallResult.Failure(CanopyFailureKind.RESPONSE_TOO_LARGE, 200)
+		val result = CanopyClient(
+			FixtureTransport(
+				CanopyHttpResponse(
+					status = 200,
+					body = body,
+					headers = jsonHeaders(),
+					bodyReadMode = CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK,
+				),
+			),
+		).discover()
+		result shouldBe CanopyCallResult.Failure(CanopyFailureKind.BUFFERED_RESPONSE_TOO_LARGE, 200)
+	}
+
+	test("an exactly capped buffered body remains decodable") {
+		val body = discoveryBodyOfSize(CanopyContractBounds.MAX_ACTION_BYTES)
+		body.encodeToByteArray().size shouldBe CanopyContractBounds.MAX_ACTION_BYTES
+
+		CanopyClient(FixtureTransport(response(200, body))).discover() shouldBe
+			CanopyCallResult.Success(CanopyDiscovery(1, 1))
 	}
 
 	test("deeply nested additive JSON is rejected before contract decoding") {
@@ -162,7 +337,7 @@ class CanopyClientTests : FunSpec({
 	}
 
 	test("transport failures do not escape into the item screen") {
-		val transport = CanopyTransport { _, _, _, _ -> error("offline") }
+		val transport = CanopyTransport { _, _, _, _, _ -> error("offline") }
 		CanopyClient(transport).discover() shouldBe CanopyCallResult.Failure(CanopyFailureKind.TRANSPORT)
 	}
 })
@@ -172,6 +347,7 @@ private data class RecordedRequest(
 	val path: String,
 	val query: Map<String, Any>,
 	val body: JsonElement?,
+	val maximumResponseBytes: Int,
 )
 
 private class FixtureTransport(
@@ -184,8 +360,9 @@ private class FixtureTransport(
 		path: String,
 		query: Map<String, Any>,
 		body: JsonElement?,
+		maximumResponseBytes: Int,
 	): CanopyHttpResponse {
-		lastRequest = RecordedRequest(method, path, query, body)
+		lastRequest = RecordedRequest(method, path, query, body, maximumResponseBytes)
 		return response
 	}
 }
@@ -194,7 +371,39 @@ private fun response(
 	status: Int,
 	body: String = "",
 	headers: Map<String, List<String>> = emptyMap(),
-) = CanopyHttpResponse(status, body.encodeToByteArray(), headers)
+) = CanopyHttpResponse(
+	status = status,
+	body = body.encodeToByteArray(),
+	headers = if (body.isNotEmpty() && headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
+		headers + jsonHeaders()
+	} else {
+		headers
+	},
+	bodyReadMode = CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK,
+)
+
+private fun jsonHeaders(value: String = "application/json") = mapOf("Content-Type" to listOf(value))
+
+private fun prepareHandle() = CanopyContractMapper.prepareHandle("opaque-prepare-handle")
+
+private fun preparedAction(): CanopyPreparedAction = CanopyContractMapper.preparedAction(
+	FIXTURE_JSON.decodeFromString<CanopyPrepareResponseWire>(fixture("prepare.all-field-kinds.200.json")),
+)
+
+private fun requiredAnswers(): List<CanopyAnswer> = listOf(
+	CanopyAnswer.Confirmation("confirm", true),
+	CanopyAnswer.BooleanValue("enabled", true),
+	CanopyAnswer.SingleSelect("quality", "a"),
+)
+
+private fun discoveryBodyOfSize(size: Int): String {
+	val prefix = """{"Available":true,"ProtocolMinimum":1,"ProtocolMaximum":1,"Future":""""
+	val suffix = "\"}"
+	return prefix + "x".repeat(size - prefix.length - suffix.length) + suffix
+}
+
+private val TEST_ITEM_ID = UUID.fromString("01234567-89ab-cdef-0123-456789abcdef")
+private val FIXTURE_JSON = Json { ignoreUnknownKeys = true }
 
 private fun fixture(name: String): String = checkNotNull(
 	CanopyClientTests::class.java.getResource("/canopy/$name"),
