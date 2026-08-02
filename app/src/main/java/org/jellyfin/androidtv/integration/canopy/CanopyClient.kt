@@ -84,16 +84,28 @@ internal class ApiClientCanopyTransport(
  * buffered successful bodies at that point. [CanopyBodyReadMode] makes this
  * allocation limitation explicit until the SDK exposes a bounded read seam.
  */
+internal interface CanopyGateway {
+	suspend fun discover(): CanopyCallResult<CanopyDiscovery>
+	suspend fun negotiate(protocolMinimum: Int = 1, protocolMaximum: Int = 1): CanopyCallResult<CanopyNegotiation>
+	suspend fun resolveItemDetail(itemId: UUID, locale: Locale = Locale.getDefault()): CanopyCallResult<CanopyResolvedSurface>
+	suspend fun prepare(prepareHandle: CanopyPrepareHandle): CanopyCallResult<CanopyPreparedAction>
+	suspend fun invoke(
+		preparedAction: CanopyPreparedAction,
+		idempotencyKey: UUID,
+		answers: List<CanopyAnswer>,
+	): CanopyCallResult<CanopyActionResult>
+}
+
 internal class CanopyClient internal constructor(
 	private val transport: CanopyTransport,
 	private val json: Json = Json {
 		ignoreUnknownKeys = true
 		explicitNulls = false
 	},
-) {
+) : CanopyGateway {
 	constructor(apiClient: ApiClient) : this(ApiClientCanopyTransport(apiClient))
 
-	suspend fun discover(): CanopyCallResult<CanopyDiscovery> {
+	override suspend fun discover(): CanopyCallResult<CanopyDiscovery> {
 		val result = get<CanopyDiscoveryWire, CanopyDiscoveryWire>(
 			path = DISCOVERY_PATH,
 			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
@@ -117,9 +129,9 @@ internal class CanopyClient internal constructor(
 		}
 	}
 
-	suspend fun negotiate(
-		protocolMinimum: Int = PROTOCOL_VERSION,
-		protocolMaximum: Int = PROTOCOL_VERSION,
+	override suspend fun negotiate(
+		protocolMinimum: Int,
+		protocolMaximum: Int,
 	): CanopyCallResult<CanopyNegotiation> {
 		if (protocolMinimum <= 0 || protocolMaximum < protocolMinimum) {
 			return invalidResponse()
@@ -141,9 +153,9 @@ internal class CanopyClient internal constructor(
 		)
 	}
 
-	suspend fun resolveItemDetail(
+	override suspend fun resolveItemDetail(
 		itemId: UUID,
-		locale: Locale = Locale.getDefault(),
+		locale: Locale,
 	): CanopyCallResult<CanopyResolvedSurface> {
 		val request = CanopyResolveRequestWire(
 			protocol = PROTOCOL_VERSION,
@@ -165,7 +177,7 @@ internal class CanopyClient internal constructor(
 		)
 	}
 
-	suspend fun prepare(prepareHandle: CanopyPrepareHandle): CanopyCallResult<CanopyPreparedAction> {
+	override suspend fun prepare(prepareHandle: CanopyPrepareHandle): CanopyCallResult<CanopyPreparedAction> {
 		return post(
 			path = PREPARE_PATH,
 			request = json.encodeToJsonElement(CanopyPrepareRequestWire(prepareHandle.wireValue())),
@@ -174,7 +186,7 @@ internal class CanopyClient internal constructor(
 		)
 	}
 
-	suspend fun invoke(
+	override suspend fun invoke(
 		preparedAction: CanopyPreparedAction,
 		idempotencyKey: UUID,
 		answers: List<CanopyAnswer>,

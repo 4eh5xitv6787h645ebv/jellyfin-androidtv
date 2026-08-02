@@ -16,6 +16,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,11 +55,12 @@ class GridButtonPresenter @JvmOverloads constructor(
 					.width(width.dp)
 					.clip(RoundedCornerShape(4.dp))
 					.background(colorResource(R.color.button_default_normal_background))
+					.clearAndSetSemantics { contentDescription = value.contentDescription }
 			) {
 				if (value.imageRes != null) {
 					Image(
 						painter = painterResource(value.imageRes),
-						contentDescription = value.text,
+						contentDescription = null,
 						contentScale = ContentScale.Crop,
 						modifier = Modifier.size(width.dp, imageHeight.dp)
 					)
