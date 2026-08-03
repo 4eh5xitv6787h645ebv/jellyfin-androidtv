@@ -2,6 +2,7 @@ package org.jellyfin.androidtv.integration.canopy
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -40,8 +41,12 @@ class CanopyClientTests : FunSpec({
 	test("ApiClient transport reuses the bounded session client and passes JsonElement for SDK application json encoding") {
 		val apiClient = mockk<ApiClient>()
 		val payload = FIXTURE_JSON.parseToJsonElement("""{"PrepareHandle":"opaque"}""")
+		val route = CanopyPlatformRoutes.prepare
+		every {
+			apiClient.createUrl(route.encodedPath, emptyMap(), emptyMap(), false)
+		} returns "https://example.invalid${route.encodedPath}"
 		coEvery {
-			apiClient.request(HttpMethod.POST, "/bounded", emptyMap(), emptyMap(), payload)
+			apiClient.request(route.method, route.encodedPath, emptyMap(), emptyMap(), payload)
 		} returns RawResponse(
 			"{}".encodeToByteArray(),
 			200,
@@ -49,16 +54,20 @@ class CanopyClientTests : FunSpec({
 		)
 		val transport = ApiClientCanopyTransport(apiClient)
 
-		val result = transport.request(HttpMethod.POST, "/bounded", emptyMap(), payload, 32)
+		val result = transport.request(route.method, route.encodedPath, emptyMap(), payload, route.maximumResponseBytes)
 
 		result.bodyReadMode shouldBe CanopyBodyReadMode.BOUNDED_DURING_READ
 		coVerify(exactly = 1) {
-			apiClient.request(HttpMethod.POST, "/bounded", emptyMap(), emptyMap(), payload)
+			apiClient.request(route.method, route.encodedPath, emptyMap(), emptyMap(), payload)
 		}
 	}
 
 	test("ApiClient status exceptions retain status without becoming transport failures") {
 		val apiClient = mockk<ApiClient>()
+		val route = CanopyPlatformRoutes.discovery
+		every {
+			apiClient.createUrl(route.encodedPath, emptyMap(), emptyMap(), false)
+		} returns "https://example.invalid${route.encodedPath}"
 		coEvery {
 			apiClient.request(HttpMethod.GET, any(), emptyMap(), emptyMap(), null)
 		} throws InvalidStatusException(404)

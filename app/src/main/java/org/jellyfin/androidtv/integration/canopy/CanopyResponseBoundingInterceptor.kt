@@ -2,10 +2,13 @@ package org.jellyfin.androidtv.integration.canopy
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.util.ArrayDeque
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import org.jellyfin.sdk.api.client.HttpMethod
 
 /**
  * Bounds only the five reviewed Platform v1 responses before SDK 1.8.12 calls
@@ -13,11 +16,17 @@ import okhttp3.ResponseBody.Companion.toResponseBody
  * OkHttpFactory base, so URL construction, authentication, TLS, timeouts and the
  * connection pool remain owned by the one Jellyfin SDK network stack.
  */
-internal class CanopyResponseBoundingInterceptor : Interceptor {
+internal class CanopyResponseBoundingInterceptor(
+	private val requestRegistry: CanopyRequestRegistry = CanopyRequestRegistry.shared,
+) : Interceptor {
 	override fun intercept(chain: Interceptor.Chain): Response {
 		val request = chain.request()
-		val route = CanopyPlatformRoutes.exact(request.method, request.url.encodedPath)
-			?: return chain.proceed(request)
+		val route = requestRegistry.claim(request.method, request.url)
+			?: if (CanopyPlatformRoutes.hasReviewedTerminal(request.method, request.url.encodedPath)) {
+				throw CanopyUnregisteredRequestException()
+			} else {
+				return chain.proceed(request)
+			}
 		val response = chain.proceed(request)
 		val boundedHeaders = response.boundedProtocolHeaders()
 		val originalBody = response.body
@@ -73,6 +82,67 @@ internal class CanopyResponseBoundingInterceptor : Interceptor {
 		private const val HEADER_ETAG = "ETag"
 		private const val MAX_CONTENT_TYPE_BYTES = 256
 		private const val MAX_ETAG_BYTES = 128
+	}
+}
+
+/** Prevents a Platform-shaped request from ever reaching SDK-wide buffering. */
+internal class CanopyUnregisteredRequestException : IOException(MESSAGE) {
+	companion object {
+		internal const val MESSAGE = "Unregistered Canopy request"
+	}
+}
+
+/**
+ * Carries exact request provenance from [ApiClientCanopyTransport] to the shared
+ * OkHttp interceptor without adding a wire-visible marker or another HTTP stack.
+ *
+ * Registrations use the fully canonical SDK URL, including its configured base
+ * path and query. This makes literal-percent and other valid base paths safe while
+ * unrelated terminal-path lookalikes remain outside the interceptor. Identical
+ * concurrent requests each own one queued registration.
+ */
+internal class CanopyRequestRegistry {
+	private data class RequestKey(val method: String, val url: HttpUrl)
+
+	private val monitor = Any()
+	private val pending = mutableMapOf<RequestKey, ArrayDeque<Registration>>()
+
+	fun register(method: HttpMethod, url: HttpUrl, route: CanopyPlatformRoute): Registration = synchronized(monitor) {
+		val registration = Registration(method.name, url, route)
+		pending.getOrPut(RequestKey(method.name, url), ::ArrayDeque).addLast(registration)
+		registration
+	}
+
+	fun claim(method: String, url: HttpUrl): CanopyPlatformRoute? = synchronized(monitor) {
+		val key = RequestKey(method, url)
+		val queue = pending[key] ?: return@synchronized null
+		val registration = queue.pollFirst() ?: return@synchronized null
+		registration.closedOrClaimed = true
+		if (queue.isEmpty()) pending.remove(key)
+		registration.route
+	}
+
+	private fun cancel(registration: Registration) = synchronized(monitor) {
+		if (registration.closedOrClaimed) return@synchronized
+		registration.closedOrClaimed = true
+		val key = RequestKey(registration.method, registration.url)
+		val queue = pending[key] ?: return@synchronized
+		queue.remove(registration)
+		if (queue.isEmpty()) pending.remove(key)
+	}
+
+	internal inner class Registration(
+		internal val method: String,
+		internal val url: HttpUrl,
+		internal val route: CanopyPlatformRoute,
+	) : AutoCloseable {
+		internal var closedOrClaimed = false
+
+		override fun close() = cancel(this)
+	}
+
+	companion object {
+		val shared = CanopyRequestRegistry()
 	}
 }
 

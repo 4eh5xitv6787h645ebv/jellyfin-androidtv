@@ -39,10 +39,11 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			Triple(HttpMethod.POST, "/JellyfinCanopy/Platform/v1/actions/invoke", CanopyContractBounds.MAX_ACTION_BYTES),
 		)
 
-		CanopyPlatformRoutes.exact("POST", "/JellyfinCanopy/Platform/v1/discovery") shouldBe null
-		CanopyPlatformRoutes.exact("GET", "/prefix/JellyfinCanopy/Platform/v1/discovery") shouldBe
+		CanopyPlatformRoutes.exactRelative(HttpMethod.POST, "/JellyfinCanopy/Platform/v1/discovery") shouldBe null
+		CanopyPlatformRoutes.exactRelative(HttpMethod.GET, "/JellyfinCanopy/Platform/v1/discovery") shouldBe
 			CanopyPlatformRoutes.discovery
-		CanopyPlatformRoutes.exact("GET", "/JellyfinCanopy/Platform/v1/discovery/") shouldBe null
+		CanopyPlatformRoutes.exactRelative(HttpMethod.GET, "/prefix/JellyfinCanopy/Platform/v1/discovery") shouldBe null
+		CanopyPlatformRoutes.exactRelative(HttpMethod.GET, "/JellyfinCanopy/Platform/v1/discovery/") shouldBe null
 	}
 
 	test("real SDK composition bounds all five routes at root and configured base paths") {
@@ -50,8 +51,10 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			"" to "https://example.invalid",
 			"/jellyfin" to "https://example.invalid/jellyfin",
 			"/my%20jellyfin" to "https://example.invalid/my%20jellyfin",
+			"/percent%25segment" to "https://example.invalid/percent%25segment",
 		).forEach { (expectedPrefix, baseUrl) ->
 			val observedPaths = mutableListOf<String>()
+			val requestRegistry = CanopyRequestRegistry()
 			val responseProvider = Interceptor { chain ->
 				observedPaths += chain.request().url.encodedPath
 				response(
@@ -61,7 +64,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 				)
 			}
 			val base = OkHttpClient.Builder()
-				.addInterceptor(CanopyResponseBoundingInterceptor())
+				.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 				.addInterceptor(responseProvider)
 				.build()
 			val factory = OkHttpFactory(base)
@@ -73,7 +76,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 				HttpClientOptions(),
 				factory,
 			)
-			val transport = ApiClientCanopyTransport(api)
+			val transport = ApiClientCanopyTransport(api, requestRegistry)
 
 			CanopyPlatformRoutes.all.forEach { route ->
 				val result = transport.request(
@@ -92,7 +95,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 		}
 	}
 
-	test("prefix matcher rejects method suffix duplicate slash encoding and case near-matches") {
+	test("unregistered Platform terminals reject while non-terminal near matches pass through") {
 		val nearMatches = listOf(
 			"POST" to "/jellyfin/JellyfinCanopy/Platform/v1/discovery",
 			"GET" to "/jellyfin/JellyfinCanopy/Platform/v1/discovery/suffix",
@@ -102,14 +105,93 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			"GET" to "/jellyfin/jellyfincanopy/Platform/v1/discovery",
 			"GET" to "/jellyfin/%4AellyfinCanopy/Platform/v1/discovery",
 			"GET" to "/jellyfin/JellyfinCanopy%2FPlatform/v1/discovery",
+			"GET" to "/%252e%252e/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/%252F/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/%255c/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/%254AellyfinCanopy/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/%25252e%25252e/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/percent%25segment/JellyfinCanopy/Platform/v1/discovery",
 		)
 
 		nearMatches.forEach { (method, path) ->
-			CanopyPlatformRoutes.exact(method, path) shouldBe null
 			val request = request(method, path)
+			request.url.encodedPath shouldBe path
 			val upstream = response(request, 200, "x".repeat(CanopyContractBounds.MAX_RESOLVE_BYTES + 20))
 
-			CanopyResponseBoundingInterceptor().intercept(chain(request, upstream)) shouldBe upstream
+			if (CanopyPlatformRoutes.hasReviewedTerminal(method, path)) {
+				shouldThrow<CanopyUnregisteredRequestException> {
+					CanopyResponseBoundingInterceptor().intercept(chain(request, upstream))
+				}.message shouldBe CanopyUnregisteredRequestException.MESSAGE
+			} else {
+				CanopyResponseBoundingInterceptor().intercept(chain(request, upstream)) shouldBe upstream
+			}
+		}
+	}
+
+	test("an exact Platform URL is bounded only while its transport registration is live") {
+		val route = CanopyPlatformRoutes.discovery
+		val request = request(route.method.name, "/percent%25segment${route.encodedPath}")
+		val upstream = response(request, 200, "bounded")
+		val requestRegistry = CanopyRequestRegistry()
+		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+
+		shouldThrow<CanopyUnregisteredRequestException> {
+			interceptor.intercept(chain(request, upstream))
+		}
+		requestRegistry.register(route.method, request.url, route).close()
+		shouldThrow<CanopyUnregisteredRequestException> {
+			interceptor.intercept(chain(request, upstream))
+		}
+
+		val registration = requestRegistry.register(route.method, request.url, route)
+		val bounded = interceptor.intercept(chain(request, upstream))
+		bounded.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
+			CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
+		registration.close()
+
+		shouldThrow<CanopyUnregisteredRequestException> {
+			interceptor.intercept(chain(request, upstream))
+		}
+	}
+
+	test("identical concurrent requests consume one exact registration each") {
+		val route = CanopyPlatformRoutes.negotiate
+		val request = request(route.method.name, "${route.encodedPath}?protocolMinimum=1&protocolMaximum=1")
+		val requestRegistry = CanopyRequestRegistry()
+		val first = requestRegistry.register(route.method, request.url, route)
+		val second = requestRegistry.register(route.method, request.url, route)
+		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+
+		repeat(2) {
+			val upstream = response(request, 200, "bounded-$it")
+			interceptor.intercept(chain(request, upstream))
+				.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
+				CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
+		}
+		first.close()
+		second.close()
+
+		val unregistered = response(request, 200, "ordinary")
+		shouldThrow<CanopyUnregisteredRequestException> {
+			interceptor.intercept(chain(request, unregistered))
+		}
+	}
+
+	test("the transport refuses unreviewed paths and mismatched response bounds before SDK dispatch") {
+		val api = mockk<org.jellyfin.sdk.api.client.ApiClient>()
+		val transport = ApiClientCanopyTransport(api, CanopyRequestRegistry())
+
+		shouldThrow<IllegalArgumentException> {
+			transport.request(HttpMethod.GET, "/Items", emptyMap(), null, 32)
+		}
+		shouldThrow<IllegalArgumentException> {
+			transport.request(
+				CanopyPlatformRoutes.discovery.method,
+				CanopyPlatformRoutes.discovery.encodedPath,
+				emptyMap(),
+				null,
+				CanopyPlatformRoutes.discovery.maximumResponseBytes + 1,
+			)
 		}
 	}
 
@@ -135,7 +217,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			),
 		)
 
-		val bounded = CanopyResponseBoundingInterceptor().intercept(chain(request, upstream))
+		val bounded = interceptRegistered(route, request, upstream)
 
 		bounded.body!!.string() shouldBe """{"Available":true}"""
 		bounded.headers.toMultimap() shouldContainExactly mapOf(
@@ -150,6 +232,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 		val secondStrong = "\"sha256-${"d".repeat(64)}\""
 		var etags = listOf(canonical, secondStrong)
 		var contentTypes = listOf("application/json")
+		val requestRegistry = CanopyRequestRegistry()
 		val responseProvider = Interceptor { chain ->
 			val headers = Headers.Builder().apply {
 				contentTypes.forEach { add("Content-Type", it) }
@@ -163,7 +246,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			)
 		}
 		val base = OkHttpClient.Builder()
-			.addInterceptor(CanopyResponseBoundingInterceptor())
+			.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 			.addInterceptor(responseProvider)
 			.build()
 		val factory = OkHttpFactory(base)
@@ -175,9 +258,9 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			HttpClientOptions(),
 			factory,
 		)
-		val client = CanopyClient(api)
+		val client = CanopyClient(ApiClientCanopyTransport(api, requestRegistry))
 
-		val boundedDuplicate = ApiClientCanopyTransport(api).request(
+		val boundedDuplicate = ApiClientCanopyTransport(api, requestRegistry).request(
 			HttpMethod.GET,
 			CanopyPlatformRoutes.discovery.encodedPath,
 			emptyMap(),
@@ -204,7 +287,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 		val upstream = response(request, 200, "x".repeat(route.maximumResponseBytes + 20) + secretTail)
 
 		val error = shouldThrow<CanopyBoundedResponseException> {
-			CanopyResponseBoundingInterceptor().intercept(chain(request, upstream))
+			interceptRegistered(route, request, upstream)
 		}
 
 		error.status shouldBe 200
@@ -225,7 +308,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 		)
 
 		val error = shouldThrow<CanopyBoundedResponseException> {
-			CanopyResponseBoundingInterceptor().intercept(chain(request, upstream))
+			interceptRegistered(route, request, upstream)
 		}
 
 		error.status shouldBe 503
@@ -236,6 +319,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 
 	test("SDK 1.8.12 wraps the exact interceptor exception and the transport recovers it") {
 		var authenticatedRequestObserved = false
+		val requestRegistry = CanopyRequestRegistry()
 		val responseProvider = Interceptor { chain ->
 			authenticatedRequestObserved = chain.request().header("Authorization")?.isNotBlank() == true
 			response(
@@ -246,7 +330,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			)
 		}
 		val base = OkHttpClient.Builder()
-			.addInterceptor(CanopyResponseBoundingInterceptor())
+			.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 			.addInterceptor(responseProvider)
 			.build()
 		val factory = OkHttpFactory(base)
@@ -259,7 +343,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			factory,
 		)
 
-		val result = ApiClientCanopyTransport(api).request(
+		val result = ApiClientCanopyTransport(api, requestRegistry).request(
 			HttpMethod.POST,
 			CanopyPlatformRoutes.invoke.encodedPath,
 			emptyMap(),
@@ -275,13 +359,24 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 
 	test("the transport does not unwrap a different SDK IOException") {
 		val api = mockk<org.jellyfin.sdk.api.client.ApiClient>()
+		val route = CanopyPlatformRoutes.discovery
 		every { api.webSocket } returns mockk()
+		every { api.baseUrl } returns "https://example.invalid"
+		every {
+			api.createUrl(route.encodedPath, emptyMap(), emptyMap(), false)
+		} returns "https://example.invalid${route.encodedPath}"
 		io.mockk.coEvery {
 			api.request(any(), any(), any(), any(), any())
 		} throws ApiClientException("SDK failure", IOException("ordinary failure"))
 
 		shouldThrow<ApiClientException> {
-			ApiClientCanopyTransport(api).request(HttpMethod.GET, "/not-canopy", emptyMap(), null, 32)
+			ApiClientCanopyTransport(api).request(
+				route.method,
+				route.encodedPath,
+				emptyMap(),
+				null,
+				route.maximumResponseBytes,
+			)
 		}
 	}
 })
@@ -315,4 +410,18 @@ private fun response(
 private fun chain(request: Request, response: Response) = mockk<Interceptor.Chain>().also { chain ->
 	every { chain.request() } returns request
 	every { chain.proceed(request) } returns response
+}
+
+private fun interceptRegistered(
+	route: CanopyPlatformRoute,
+	request: Request,
+	response: Response,
+): Response {
+	val requestRegistry = CanopyRequestRegistry()
+	val registration = requestRegistry.register(route.method, request.url, route)
+	return try {
+		CanopyResponseBoundingInterceptor(requestRegistry).intercept(chain(request, response))
+	} finally {
+		registration.close()
+	}
 }

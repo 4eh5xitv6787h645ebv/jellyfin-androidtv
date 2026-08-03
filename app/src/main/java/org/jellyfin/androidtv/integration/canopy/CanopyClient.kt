@@ -8,6 +8,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpMethod
 import org.jellyfin.sdk.api.client.exception.ApiClientException
@@ -44,6 +45,7 @@ internal fun interface CanopyTransport {
 
 internal class ApiClientCanopyTransport(
 	private val apiClient: ApiClient,
+	private val requestRegistry: CanopyRequestRegistry = CanopyRequestRegistry.shared,
 ) : CanopyTransport {
 	override suspend fun request(
 		method: HttpMethod,
@@ -52,6 +54,11 @@ internal class ApiClientCanopyTransport(
 		body: JsonElement?,
 		maximumResponseBytes: Int,
 	): CanopyHttpResponse {
+		val route = CanopyPlatformRoutes.exactRelative(method, path)
+			?.takeIf { it.maximumResponseBytes == maximumResponseBytes }
+			?: throw IllegalArgumentException(UNREVIEWED_ROUTE_MESSAGE)
+		val requestUrl = apiClient.createUrl(path, emptyMap(), query).toHttpUrl()
+		val registration = requestRegistry.register(method, requestUrl, route)
 		return try {
 			val response = apiClient.request(method, path, emptyMap(), query, body)
 			CanopyHttpResponse(
@@ -79,6 +86,8 @@ internal class ApiClientCanopyTransport(
 				headers = bounded.headers,
 				bodyReadMode = CanopyBodyReadMode.BOUNDED_DURING_READ,
 			)
+		} finally {
+			registration.close()
 		}
 	}
 
@@ -86,6 +95,10 @@ internal class ApiClientCanopyTransport(
 		.firstOrNull { (name) -> name.equals(CanopyResponseBoundingInterceptor.BOUNDED_HEADER, ignoreCase = true) }
 		?.value
 		?.singleOrNull() == CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
+
+	private companion object {
+		const val UNREVIEWED_ROUTE_MESSAGE = "Unreviewed Canopy route"
+	}
 }
 
 /**
