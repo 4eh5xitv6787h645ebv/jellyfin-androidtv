@@ -171,7 +171,9 @@ private fun SeerrPreviewCard(
 	subtitle: String?,
 	focused: Boolean,
 ) {
-	val size = DpSize(150.dp * aspectRatio, 150.dp)
+	// Match CardPresenter: landscape cards use a smaller base height
+	val baseHeight = if (aspectRatio > 1f) 130.dp else 150.dp
+	val size = DpSize(baseHeight * aspectRatio, baseHeight)
 
 	val focusModifier = if (focused) Modifier.basicMarquee(
 		iterations = Int.MAX_VALUE,

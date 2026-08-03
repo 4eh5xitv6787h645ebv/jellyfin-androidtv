@@ -37,7 +37,11 @@ import org.jellyfin.androidtv.ui.base.button.IconButtonDefaults
 import org.jellyfin.androidtv.ui.navigation.ActivityDestinations
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.preference.UserPreferences
+import org.jellyfin.androidtv.ui.settings.compat.rememberPreference
 import org.jellyfin.androidtv.ui.playback.MediaManager
 import org.jellyfin.androidtv.ui.settings.compat.SettingsViewModel
 import org.jellyfin.androidtv.util.apiclient.getUrl
@@ -144,8 +148,17 @@ private fun MainToolbar(
 						colors = if (activeButton == MainToolbarActiveButton.Home) activeButtonColors else ButtonDefaults.colors(),
 						content = { Text(stringResource(R.string.lbl_home)) }
 					)
+					// Only surface Discover when Seerr is actually reachable and
+					// linked for this user (graceful omission), and the user has
+					// not disabled the Seerr surfaces.
 					val userPreferences = koinInject<UserPreferences>()
-					if (userPreferences[UserPreferences.canopySeerrSearchEnabled]) {
+					val seerrRepository = koinInject<SeerrRepository>()
+					val seerrEnabled by rememberPreference(userPreferences, UserPreferences.canopySeerrSearchEnabled)
+					val seerrAvailable by seerrRepository.availability.collectAsState()
+					LaunchedEffect(seerrEnabled) {
+						if (seerrEnabled) seerrRepository.capabilities()
+					}
+					if (seerrEnabled && seerrAvailable == true) {
 						Button(
 							onClick = {
 								if (activeButton != MainToolbarActiveButton.Discover) {

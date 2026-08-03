@@ -5,6 +5,7 @@ import androidx.leanback.app.VerticalGridSupportFragment
 import androidx.leanback.widget.ArrayObjectAdapter
 import androidx.leanback.widget.OnItemViewClickedListener
 import androidx.leanback.widget.OnItemViewSelectedListener
+import androidx.leanback.widget.FocusHighlight
 import androidx.leanback.widget.VerticalGridPresenter
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -40,7 +41,8 @@ class SeerrGenreGridFragment : VerticalGridSupportFragment() {
 		super.onCreate(savedInstanceState)
 
 		title = arguments?.getString(ARG_GENRE_NAME).orEmpty()
-		setGridPresenter(VerticalGridPresenter().apply { numberOfColumns = COLUMNS })
+		// Match BrowseGridFragment's presenter configuration (zoom, no dimmer)
+		setGridPresenter(VerticalGridPresenter(FocusHighlight.ZOOM_FACTOR_LARGE, false).apply { numberOfColumns = COLUMNS })
 		adapter = gridAdapter
 
 		setOnItemViewClickedListener(OnItemViewClickedListener { _, item, _, _ ->
@@ -66,6 +68,8 @@ class SeerrGenreGridFragment : VerticalGridSupportFragment() {
 			val page = seerrRepository.discoverByGenre(mediaType, genreId, nextPage)
 			loading = false
 			if (!isAdded) return@launch
+			// null = transport failure; keep hasMore so scrolling retries
+			if (page == null) return@launch
 
 			hasMore = page.hasMore && page.items.isNotEmpty()
 			nextPage = page.page + 1

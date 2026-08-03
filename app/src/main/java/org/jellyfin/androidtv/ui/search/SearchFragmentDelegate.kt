@@ -36,7 +36,12 @@ internal class SearchFragmentDelegate(
 	private var seerrEntries: List<SeerrEntry> = emptyList()
 
 	fun showResults(searchResultGroups: Collection<SearchResultGroup>) {
-		rowsAdapter.clear()
+		// Remove the library rows individually instead of clear(): the Seerr
+		// row must stay attached while it may hold focus (#4).
+		for (index in rowsAdapter.size() - 1 downTo 0) {
+			val row = rowsAdapter.get(index)
+			if (row !== seerrRow) rowsAdapter.removeAt(index)
+		}
 		val adapters = mutableListOf<ItemRowAdapter>()
 		for ((labelRes, baseItems) in searchResultGroups) {
 			val adapter = ItemRowAdapter(
@@ -71,7 +76,7 @@ internal class SearchFragmentDelegate(
 			return
 		}
 
-		seerrAdapter.setItems(seerrEntries, null)
+		seerrAdapter.setItems(seerrEntries, SEERR_DIFF)
 		if (rowsAdapter.indexOf(seerrRow) < 0) rowsAdapter.add(seerrRow)
 	}
 
@@ -80,6 +85,13 @@ internal class SearchFragmentDelegate(
 		if (item !is BaseRowItem) return@OnItemViewClickedListener
 		val adapter = (row as? ListRow)?.adapter as? ItemRowAdapter ?: return@OnItemViewClickedListener
 		itemLauncher.launch(item, adapter, context)
+	}
+
+	private companion object {
+		private val SEERR_DIFF = object : androidx.leanback.widget.DiffCallback<SeerrEntry>() {
+			override fun areItemsTheSame(oldItem: SeerrEntry, newItem: SeerrEntry): Boolean = oldItem == newItem
+			override fun areContentsTheSame(oldItem: SeerrEntry, newItem: SeerrEntry): Boolean = oldItem == newItem
+		}
 	}
 
 	val onItemViewSelectedListener = OnItemViewSelectedListener { _, item, _, _ ->

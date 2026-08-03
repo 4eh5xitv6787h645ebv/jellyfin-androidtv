@@ -211,7 +211,7 @@ class SeerrRepositoryTests : FunSpec({
 			),
 		)
 
-		val page = repository.discoverByGenre(SeerrMediaType.MOVIE, 28, 1)
+		val page = repository.discoverByGenre(SeerrMediaType.MOVIE, 28, 1).shouldNotBeNull()
 
 		page.hasMore shouldBe true
 		page.items.single().title shouldBe "The Matrix"

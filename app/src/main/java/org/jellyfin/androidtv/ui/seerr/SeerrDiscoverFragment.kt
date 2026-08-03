@@ -3,10 +3,17 @@ package org.jellyfin.androidtv.ui.seerr
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.Fragment
 import androidx.fragment.compose.AndroidFragment
@@ -46,11 +53,28 @@ class SeerrDiscoverFragment : Fragment() {
 		Column {
 			MainToolbar(MainToolbarActiveButton.Discover)
 
+			// The leanback code has its own awful focus handling that doesn't work properly with Compose view interop. To work around
+			// this we add custom behavior that only allows focus exit when the current selected row is the first one, matching the
+			// Home and Search screens.
+			var rowsSupportFragment by remember { mutableStateOf<RowsSupportFragment?>(null) }
 			AndroidFragment<RowsSupportFragment>(
 				modifier = Modifier
+					.focusGroup()
+					.focusProperties {
+						onExit = {
+							val isFirstRowSelected = rowsSupportFragment?.selectedPosition?.let { it <= 0 } ?: false
+							if (requestedFocusDirection != FocusDirection.Up || !isFirstRowSelected) {
+								cancelFocusChange()
+							} else {
+								rowsSupportFragment?.selectedPosition = 0
+								rowsSupportFragment?.verticalGridView?.clearFocus()
+							}
+						}
+					}
 					.padding(top = 5.dp)
 					.fillMaxSize(),
 				onUpdate = { fragment ->
+					rowsSupportFragment = fragment
 					fragment.adapter = rowsAdapter
 					fragment.onItemViewClickedListener = OnItemViewClickedListener { _, item, _, _ ->
 						navigationRepository.navigateToSeerrEntry(item)

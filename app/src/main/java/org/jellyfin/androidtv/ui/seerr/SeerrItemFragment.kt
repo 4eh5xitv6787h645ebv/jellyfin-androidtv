@@ -17,16 +17,18 @@ import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.data.model.InfoItem
 import org.jellyfin.androidtv.databinding.FragmentFullDetailsBinding
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrCapabilities
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrDiscoverItem
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrItemDetails
-import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaStatus
-import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRatings
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaType
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrQuotaBucket
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRatings
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRequestOutcome
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrSeason
 import org.jellyfin.androidtv.ui.TextUnderButton
 import org.jellyfin.androidtv.ui.itemdetail.MyDetailsOverviewRow
+import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter
 import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter
@@ -42,8 +44,13 @@ import java.util.UUID
 /**
  * Native details screen for a Seerr title that is not (yet) in the library.
  * Mirrors the layout of [org.jellyfin.androidtv.ui.itemdetail.FullDetailsFragment]:
- * a details overview row with request actions, followed by cast, similar and
- * recommendation rows served by the Canopy Seerr proxy.
+ * a details overview row with request actions, followed by cast, collection,
+ * similar, recommendation and more-from rows served by the Canopy Seerr proxy.
+ *
+ * The details row renders as soon as the item details arrive; ratings, 4K
+ * capability and quota enrich the same row afterwards via an in-place rebind
+ * ([MyDetailsOverviewRowPresenter.viewHolder]) so the row is never removed
+ * while it may hold focus.
  */
 class SeerrItemFragment : Fragment() {
 	companion object {
@@ -51,6 +58,7 @@ class SeerrItemFragment : Fragment() {
 		const val ARG_MEDIA_TYPE = "MediaType"
 
 		private const val TICKS_PER_MINUTE = 600_000_000L
+		private const val BUTTON_SIZE_DP = 40
 	}
 
 	private val seerrRepository by inject<SeerrRepository>()
@@ -59,9 +67,12 @@ class SeerrItemFragment : Fragment() {
 
 	private var rowsFragment: RowsSupportFragment? = null
 	private var rowsAdapter: MutableObjectAdapter<Row>? = null
+	private var dorPresenter: MyDetailsOverviewRowPresenter? = null
 	private var detailsRow: MyDetailsOverviewRow? = null
 	private var details: SeerrItemDetails? = null
 	private var ratings: SeerrRatings? = null
+	private var capabilities: SeerrCapabilities? = null
+	private var quota: SeerrQuotaBucket? = null
 	private var requestInFlight = false
 
 	override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -84,6 +95,7 @@ class SeerrItemFragment : Fragment() {
 		super.onDestroyView()
 		rowsFragment = null
 		rowsAdapter = null
+		dorPresenter = null
 		detailsRow = null
 	}
 
@@ -100,22 +112,23 @@ class SeerrItemFragment : Fragment() {
 			}
 
 			details = loaded
-			ratings = seerrRepository.ratings(loaded.item).takeUnless { it.isEmpty }
-			if (!isAdded) return@launch
 			showDetails(loaded)
 			loadAdditionalRows(loaded)
+			enrichDetails(loaded)
 		}
 	}
 
+	/** First paint: the details row renders before any secondary requests. */
 	private fun showDetails(details: SeerrItemDetails) {
 		val fragment = rowsFragment ?: return
 
-		val selector = ClassPresenterSelector().apply {
-			addClassPresenter(MyDetailsOverviewRow::class.java, MyDetailsOverviewRowPresenter(markdownRenderer))
-			addClassPresenter(ListRow::class.java, CustomListRowPresenter(Utils.convertDpToPixel(requireContext(), 10)))
-		}
-
-		val adapter = rowsAdapter ?: MutableObjectAdapter<Row>(selector).also {
+		val presenter = dorPresenter ?: MyDetailsOverviewRowPresenter(markdownRenderer).also { dorPresenter = it }
+		val adapter = rowsAdapter ?: MutableObjectAdapter<Row>(
+			ClassPresenterSelector().apply {
+				addClassPresenter(MyDetailsOverviewRow::class.java, presenter)
+				addClassPresenter(ListRow::class.java, CustomListRowPresenter(Utils.convertDpToPixel(requireContext(), 10)))
+			},
+		).also {
 			rowsAdapter = it
 			fragment.adapter = it
 		}
@@ -124,16 +137,9 @@ class SeerrItemFragment : Fragment() {
 			item = details.toDisplayItem(),
 			imageDrawable = details.item.posterUrl,
 			summary = details.overview,
-			infoItem1 = seerrStatusLabelRes(details.item.status)?.let { statusRes ->
-				InfoItem(getString(R.string.canopy_seerr_status), getString(statusRes))
-			},
-			infoItem2 = ratings?.let { InfoItem(getString(R.string.canopy_seerr_ratings), it.displayText()) },
 		)
-		buildActions(row, details)
-
-		val previous = detailsRow
+		applyRowState(row, details)
 		detailsRow = row
-		if (previous != null) adapter.remove(previous)
 		adapter.add(0, row)
 
 		// The previous screen's focused view is detached after the fragment
@@ -142,6 +148,70 @@ class SeerrItemFragment : Fragment() {
 		// FocusFinder (#4). Claim focus explicitly once content exists.
 		fragment.view?.post { fragment.view?.requestFocus() }
 	}
+
+	/** Ratings, 4K capability and quota arrive late and rebind the row in place. */
+	private fun enrichDetails(details: SeerrItemDetails) {
+		lifecycleScope.launch {
+			ratings = seerrRepository.ratings(details.item).takeUnless { it.isEmpty }
+			capabilities = seerrRepository.capabilities()
+			if (requestable(details)) quota = seerrRepository.quota(details.item.mediaType)
+			if (!isAdded) return@launch
+
+			rebindDetailsRow()
+		}
+	}
+
+	/** Applies status, ratings and actions to the row from current state. */
+	private fun applyRowState(row: MyDetailsOverviewRow, details: SeerrItemDetails) {
+		row.infoItem1 = seerrStatusLabelRes(details.item.status)?.let { statusRes ->
+			InfoItem(getString(R.string.canopy_seerr_status), getString(statusRes))
+		}
+		row.infoItem2 = ratings?.let { InfoItem(getString(R.string.canopy_seerr_ratings), it.displayText()) }
+
+		val context = requireContext()
+		val buttonSize = Utils.convertDpToPixel(context, BUTTON_SIZE_DP)
+		row.clearActions()
+
+		if (requestable(details)) {
+			val label = quota?.remaining?.let { getString(R.string.canopy_seerr_request_with_quota, it) }
+				?: getString(R.string.canopy_seerr_request)
+			row.addAction(
+				TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, label) {
+					onRequestClicked(is4k = false)
+				},
+			)
+		}
+
+		val canRequest4k = when (details.item.mediaType) {
+			SeerrMediaType.MOVIE -> capabilities?.canRequest4kMovie == true
+			SeerrMediaType.TV -> capabilities?.canRequest4kTv == true
+		}
+		if (canRequest4k && details.item.status4k.requestable) {
+			row.addAction(
+				TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, getString(R.string.canopy_seerr_request_4k)) {
+					onRequestClicked(is4k = true)
+				},
+			)
+		}
+
+		details.item.jellyfinMediaId?.let { libraryId ->
+			row.addAction(
+				TextUnderButton.create(context, R.drawable.ic_folder, buttonSize, 2, getString(R.string.canopy_seerr_open_in_library)) {
+					navigationRepository.navigate(Destinations.itemDetails(libraryId))
+				},
+			)
+		}
+	}
+
+	private fun rebindDetailsRow() {
+		val row = detailsRow ?: return
+		val details = details ?: return
+		applyRowState(row, details)
+		dorPresenter?.viewHolder?.setItem(row)
+	}
+
+	private fun requestable(details: SeerrItemDetails): Boolean =
+		details.item.status.requestable || hasRequestableSeasons(details)
 
 	private fun loadAdditionalRows(details: SeerrItemDetails) {
 		val adapter = rowsAdapter ?: return
@@ -190,47 +260,6 @@ class SeerrItemFragment : Fragment() {
 		imdb?.let { add(getString(R.string.canopy_seerr_rating_imdb, it)) }
 	}.joinToString(separator = " · ")
 
-	private fun buildActions(row: MyDetailsOverviewRow, details: SeerrItemDetails) {
-		val context = requireContext()
-		val buttonSize = Utils.convertDpToPixel(context, 40)
-
-		if (details.item.status.requestable || hasRequestableSeasons(details)) {
-			val requestButton = TextUnderButton.create(
-				context,
-				R.drawable.ic_add,
-				buttonSize,
-				2,
-				getString(R.string.canopy_seerr_request),
-			) {
-				onRequestClicked(is4k = false)
-			}
-			row.addAction(requestButton)
-
-			lifecycleScope.launch {
-				val quota = seerrRepository.quota(details.item.mediaType)
-				val remaining = quota?.remaining
-				if (remaining != null && isAdded) {
-					requestButton.setLabel(getString(R.string.canopy_seerr_request_with_quota, remaining))
-				}
-			}
-		}
-
-		lifecycleScope.launch {
-			val capabilities = seerrRepository.capabilities()
-			val canRequest4k = when (details.item.mediaType) {
-				SeerrMediaType.MOVIE -> capabilities.canRequest4kMovie
-				SeerrMediaType.TV -> capabilities.canRequest4kTv
-			}
-			if (canRequest4k && details.item.status4k.requestable && isAdded) {
-				row.addAction(
-					TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, getString(R.string.canopy_seerr_request_4k)) {
-						onRequestClicked(is4k = true)
-					},
-				)
-			}
-		}
-	}
-
 	private fun hasRequestableSeasons(details: SeerrItemDetails): Boolean =
 		details.item.mediaType == SeerrMediaType.TV && details.seasons.any { it.status.requestable }
 
@@ -243,7 +272,9 @@ class SeerrItemFragment : Fragment() {
 			SeerrMediaType.TV -> lifecycleScope.launch {
 				// Season selection is only offered when the Seerr server allows
 				// partial series requests; otherwise request the whole series.
-				if (seerrRepository.partialRequestsEnabled() && isAdded) showSeasonPicker(details, is4k)
+				val partialRequests = seerrRepository.partialRequestsEnabled()
+				if (!isAdded) return@launch
+				if (partialRequests) showSeasonPicker(details, is4k)
 				else submit { seerrRepository.submitRequest(details.item, is4k) }
 			}
 		}
@@ -300,13 +331,17 @@ class SeerrItemFragment : Fragment() {
 		}
 	}
 
+	/** Reloads the item and rebinds the existing row in place; the row is
+	 * never removed, so focus stays where the user left it. */
 	private fun refreshDetails() {
 		val current = details ?: return
 		lifecycleScope.launch {
 			val reloaded = seerrRepository.details(current.item.mediaType, current.item.tmdbId)
 			if (!isAdded || reloaded == null) return@launch
 			details = reloaded
-			showDetails(reloaded)
+			if (requestable(reloaded)) quota = seerrRepository.quota(reloaded.item.mediaType)
+			if (!isAdded) return@launch
+			rebindDetailsRow()
 		}
 	}
 

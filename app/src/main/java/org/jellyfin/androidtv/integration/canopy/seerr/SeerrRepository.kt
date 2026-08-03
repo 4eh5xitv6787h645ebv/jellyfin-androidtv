@@ -2,6 +2,11 @@ package org.jellyfin.androidtv.integration.canopy.seerr
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -31,9 +36,19 @@ internal class SeerrRepository(
 ) {
 	private val json = Json { ignoreUnknownKeys = true }
 
+	private val capabilitiesMutex = Mutex()
 	private var cachedCapabilities: SeerrCapabilities? = null
 	private var cachedCapabilitiesAt: Long = 0L
 	private var capabilitiesUserId: String? = null
+
+	private val _availability = MutableStateFlow<Boolean?>(null)
+
+	/**
+	 * Last known Seerr availability for the current session; null until the
+	 * first [capabilities] resolution. Lets UI (e.g. the toolbar Discover
+	 * button) omit Seerr surfaces gracefully instead of showing dead ends.
+	 */
+	val availability: StateFlow<Boolean?> = _availability.asStateFlow()
 
 	/**
 	 * Resolves whether Seerr is configured, reachable and linked for the
@@ -41,7 +56,7 @@ internal class SeerrRepository(
 	 * answer expires after [NEGATIVE_STATUS_TTL_MS] so a transient outage does
 	 * not permanently hide the integration.
 	 */
-	suspend fun capabilities(): SeerrCapabilities {
+	suspend fun capabilities(): SeerrCapabilities = capabilitiesMutex.withLock {
 		val currentUser = apiClient.accessToken
 		val cached = cachedCapabilities
 		if (cached != null && capabilitiesUserId == currentUser) {
@@ -50,9 +65,7 @@ internal class SeerrRepository(
 		}
 
 		val resolved = try {
-			val status = json.decodeFromString<SeerrUserStatusDto>(
-				get("/JellyfinCanopy/seerr/user-status").decodeToString(),
-			)
+			val status = fetch<SeerrUserStatusDto>("/JellyfinCanopy/seerr/user-status")
 			SeerrCapabilities(
 				available = status.active && status.userFound,
 				canRequest4kMovie = status.canRequest4kMovie,
@@ -62,13 +75,16 @@ internal class SeerrRepository(
 			Timber.d(error, "Seerr user-status unavailable")
 			UNAVAILABLE
 		} catch (error: SerializationException) {
-			Timber.w(error, "Seerr user-status returned an unexpected shape")
+			// Never log the throwable: serialization messages can embed
+			// server-controlled response fragments.
+			Timber.w("Seerr user-status returned an unexpected shape")
 			UNAVAILABLE
 		}
 
 		cachedCapabilities = resolved
 		cachedCapabilitiesAt = System.currentTimeMillis()
 		capabilitiesUserId = currentUser
+		_availability.value = resolved.available
 		return resolved
 	}
 
@@ -111,9 +127,7 @@ internal class SeerrRepository(
 			SeerrMediaType.MOVIE -> "/JellyfinCanopy/seerr/discover/genreslider/movie"
 			SeerrMediaType.TV -> "/JellyfinCanopy/seerr/discover/genreslider/tv"
 		}
-		json.decodeFromString<List<SeerrGenreDto>>(
-			get(path, mapOf("language" to language())).decodeToString(),
-		).mapNotNull { genre ->
+		fetch<List<SeerrGenreDto>>(path, mapOf("language" to language())).mapNotNull { genre ->
 			val id = genre.id ?: return@mapNotNull null
 			val name = genre.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
 			SeerrGenreItem(
@@ -127,21 +141,20 @@ internal class SeerrRepository(
 		Timber.d(error, "Seerr genre slider failed")
 		emptyList()
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr genre slider returned an unexpected shape")
+		Timber.w("Seerr genre slider returned an unexpected shape")
 		emptyList()
 	}
 
-	/** One page of discover results for a genre. */
-	suspend fun discoverByGenre(mediaType: SeerrMediaType, genreId: Long, page: Int): SeerrPage {
+	/** One page of discover results for a genre; null on transport failure so
+	 * callers can distinguish an error (retryable) from the end of results. */
+	suspend fun discoverByGenre(mediaType: SeerrMediaType, genreId: Long, page: Int): SeerrPage? {
 		val path = when (mediaType) {
 			SeerrMediaType.MOVIE -> "/JellyfinCanopy/seerr/discover/movies/genre/$genreId"
 			SeerrMediaType.TV -> "/JellyfinCanopy/seerr/discover/tv/genre/$genreId"
 		}
 
 		return try {
-			val response = json.decodeFromString<SeerrListResponseDto>(
-				get(path, mapOf("page" to page, "language" to language())).decodeToString(),
-			)
+			val response = fetch<SeerrListResponseDto>(path, mapOf("page" to page, "language" to language()))
 			SeerrPage(
 				items = response.results.mapNotNull { it.toDiscoverItem() },
 				page = response.page,
@@ -149,23 +162,21 @@ internal class SeerrRepository(
 			)
 		} catch (error: ApiClientException) {
 			Timber.d(error, "Seerr genre discover failed")
-			SeerrPage(emptyList(), page, hasMore = false)
+			null
 		} catch (error: SerializationException) {
-			Timber.w(error, "Seerr genre discover returned an unexpected shape")
-			SeerrPage(emptyList(), page, hasMore = false)
+			Timber.w("Seerr genre discover returned an unexpected shape")
+			null
 		}
 	}
 
 	/** Movies belonging to a collection, e.g. all parts of a film series. */
 	suspend fun collectionParts(collectionId: Long): List<SeerrDiscoverItem> = try {
-		json.decodeFromString<SeerrCollectionDto>(
-			get("/JellyfinCanopy/seerr/collection/$collectionId", mapOf("language" to language())).decodeToString(),
-		).parts.mapNotNull { it.toDiscoverItem() }.take(MAX_ROW_RESULTS)
+		fetch<SeerrCollectionDto>("/JellyfinCanopy/seerr/collection/$collectionId", mapOf("language" to language())).parts.mapNotNull { it.toDiscoverItem() }.take(MAX_ROW_RESULTS)
 	} catch (error: ApiClientException) {
 		Timber.d(error, "Seerr collection failed for %d", collectionId)
 		emptyList()
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr collection returned an unexpected shape")
+		Timber.w("Seerr collection returned an unexpected shape")
 		emptyList()
 	}
 
@@ -173,9 +184,7 @@ internal class SeerrRepository(
 	suspend fun ratings(item: SeerrDiscoverItem): SeerrRatings = try {
 		when (item.mediaType) {
 			SeerrMediaType.MOVIE -> {
-				val dto = json.decodeFromString<SeerrRatingsCombinedDto>(
-					get("/JellyfinCanopy/seerr/movie/${item.tmdbId}/ratingscombined").decodeToString(),
-				)
+				val dto = fetch<SeerrRatingsCombinedDto>("/JellyfinCanopy/seerr/movie/${item.tmdbId}/ratingscombined")
 				SeerrRatings(
 					rtCritics = dto.rt?.criticsScore?.toInt(),
 					rtAudience = dto.rt?.audienceScore?.toInt(),
@@ -184,9 +193,7 @@ internal class SeerrRepository(
 			}
 
 			SeerrMediaType.TV -> {
-				val dto = json.decodeFromString<SeerrRatingSourceDto>(
-					get("/JellyfinCanopy/seerr/tv/${item.tmdbId}/ratings").decodeToString(),
-				)
+				val dto = fetch<SeerrRatingSourceDto>("/JellyfinCanopy/seerr/tv/${item.tmdbId}/ratings")
 				SeerrRatings(
 					rtCritics = dto.criticsScore?.toInt(),
 					rtAudience = dto.audienceScore?.toInt(),
@@ -198,33 +205,31 @@ internal class SeerrRepository(
 		Timber.d(error, "Seerr ratings failed for %d", item.tmdbId)
 		EMPTY_RATINGS
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr ratings returned an unexpected shape")
+		Timber.w("Seerr ratings returned an unexpected shape")
 		EMPTY_RATINGS
 	}
 
 	/** Remaining request quota for one media type; null when unlimited/unknown. */
 	suspend fun quota(mediaType: SeerrMediaType): SeerrQuotaBucket? = try {
-		val dto = json.decodeFromString<SeerrQuotaDto>(get("/JellyfinCanopy/seerr/quota").decodeToString())
+		val dto = fetch<SeerrQuotaDto>("/JellyfinCanopy/seerr/quota")
 		val bucket = if (mediaType == SeerrMediaType.MOVIE) dto.movie else dto.tv
 		bucket?.takeIf { it.restricted }?.let { SeerrQuotaBucket(it.remaining, it.restricted) }
 	} catch (error: ApiClientException) {
 		Timber.d(error, "Seerr quota unavailable")
 		null
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr quota returned an unexpected shape")
+		Timber.w("Seerr quota returned an unexpected shape")
 		null
 	}
 
 	/** Whether the Seerr server allows per-season (partial) series requests. */
 	suspend fun partialRequestsEnabled(): Boolean = try {
-		json.decodeFromString<SeerrRequestSettingsDto>(
-			get("/JellyfinCanopy/seerr/settings/partial-requests").decodeToString(),
-		).partialRequestsEnabled
+		fetch<SeerrRequestSettingsDto>("/JellyfinCanopy/seerr/settings/partial-requests").partialRequestsEnabled
 	} catch (error: ApiClientException) {
 		Timber.d(error, "Seerr request settings unavailable")
 		true
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr request settings returned an unexpected shape")
+		Timber.w("Seerr request settings returned an unexpected shape")
 		true
 	}
 
@@ -237,23 +242,19 @@ internal class SeerrRepository(
 	/** Full details for a movie or series, or null when unavailable. */
 	suspend fun details(mediaType: SeerrMediaType, tmdbId: Long): SeerrItemDetails? = try {
 		val path = "/JellyfinCanopy/seerr/${mediaType.wireValue}/$tmdbId"
-		val dto = json.decodeFromString<SeerrMediaDetailsDto>(
-			get(path, mapOf("language" to language())).decodeToString(),
-		)
+		val dto = fetch<SeerrMediaDetailsDto>(path, mapOf("language" to language()))
 		dto.toItemDetails(mediaType)
 	} catch (error: ApiClientException) {
 		Timber.d(error, "Seerr details failed for %s/%d", mediaType.wireValue, tmdbId)
 		null
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr details returned an unexpected shape")
+		Timber.w("Seerr details returned an unexpected shape")
 		null
 	}
 
 	/** Person details, or null when unavailable. */
 	suspend fun person(personId: Long): SeerrPersonDetails? = try {
-		val dto = json.decodeFromString<SeerrPersonDetailsDto>(
-			get("/JellyfinCanopy/seerr/person/$personId", mapOf("language" to language())).decodeToString(),
-		)
+		val dto = fetch<SeerrPersonDetailsDto>("/JellyfinCanopy/seerr/person/$personId", mapOf("language" to language()))
 		val id = dto.id
 		val name = dto.name?.takeIf { it.isNotBlank() }
 		if (id == null || name == null) null
@@ -270,27 +271,26 @@ internal class SeerrRepository(
 		Timber.d(error, "Seerr person failed for %d", personId)
 		null
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr person returned an unexpected shape")
+		Timber.w("Seerr person returned an unexpected shape")
 		null
 	}
 
 	/** A person's movie and series credits, newest first, deduplicated. */
 	suspend fun personCredits(personId: Long): List<SeerrDiscoverItem> = try {
-		json.decodeFromString<SeerrPersonCreditsDto>(
-			get(
-				"/JellyfinCanopy/seerr/person/$personId/combined_credits",
-				mapOf("language" to language()),
-			).decodeToString(),
+		fetch<SeerrPersonCreditsDto>(
+			"/JellyfinCanopy/seerr/person/$personId/combined_credits",
+			mapOf("language" to language()),
 		)
 			.cast
 			.mapNotNull { it.toDiscoverItem() }
 			.distinctBy { it.mediaType to it.tmdbId }
 			.sortedByDescending { it.year ?: Int.MIN_VALUE }
+			.take(MAX_CREDITS_RESULTS)
 	} catch (error: ApiClientException) {
 		Timber.d(error, "Seerr person credits failed for %d", personId)
 		emptyList()
 	} catch (error: SerializationException) {
-		Timber.w(error, "Seerr person credits returned an unexpected shape")
+		Timber.w("Seerr person credits returned an unexpected shape")
 		emptyList()
 	}
 
@@ -349,7 +349,7 @@ internal class SeerrRepository(
 		query: Map<String, Any>,
 		map: (SeerrSearchResultDto) -> SeerrEntry?,
 	): List<SeerrEntry> = try {
-		json.decodeFromString<SeerrListResponseDto>(get(path, query).decodeToString())
+		fetch<SeerrListResponseDto>(path, query)
 			.results
 			.mapNotNull(map)
 	} catch (error: ApiClientException) {
@@ -360,11 +360,14 @@ internal class SeerrRepository(
 		emptyList()
 	}
 
-	// The SDK's raw request() executes on the calling dispatcher, so hop to IO
-	// here; callers all run on the main dispatcher (lifecycle/viewModel scopes).
-	private suspend fun get(path: String, query: Map<String, Any> = emptyMap()): ByteArray =
+	// The SDK's raw request() executes on the calling dispatcher and callers
+	// all run on the main dispatcher (lifecycle/viewModel scopes), so both the
+	// HTTP round trip and the JSON decode happen on IO.
+	private suspend inline fun <reified T> fetch(path: String, query: Map<String, Any> = emptyMap()): T =
 		withContext(Dispatchers.IO) {
-			apiClient.request(HttpMethod.GET, path, emptyMap(), query, null).body
+			json.decodeFromString<T>(
+				apiClient.request(HttpMethod.GET, path, emptyMap(), query, null).body.decodeToString(),
+			)
 		}
 
 	private fun language(): String = Locale.getDefault().language.ifBlank { "en" }
@@ -475,6 +478,7 @@ internal class SeerrRepository(
 
 	companion object {
 		private const val MAX_ROW_RESULTS = 20
+		private const val MAX_CREDITS_RESULTS = 50
 		private const val YEAR_LENGTH = 4
 		private const val CONFLICT_STATUS = 409
 		private const val NEGATIVE_STATUS_TTL_MS = 60_000L
