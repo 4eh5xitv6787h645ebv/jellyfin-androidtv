@@ -37,6 +37,7 @@ import org.jellyfin.androidtv.ui.base.button.IconButtonDefaults
 import org.jellyfin.androidtv.ui.navigation.ActivityDestinations
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
+import org.jellyfin.androidtv.preference.UserPreferences
 import org.jellyfin.androidtv.ui.playback.MediaManager
 import org.jellyfin.androidtv.ui.settings.compat.SettingsViewModel
 import org.jellyfin.androidtv.util.apiclient.getUrl
@@ -48,6 +49,7 @@ import org.koin.compose.viewmodel.koinActivityViewModel
 enum class MainToolbarActiveButton {
 	User,
 	Home,
+	Discover,
 	Search,
 
 	None,
@@ -142,6 +144,18 @@ private fun MainToolbar(
 						colors = if (activeButton == MainToolbarActiveButton.Home) activeButtonColors else ButtonDefaults.colors(),
 						content = { Text(stringResource(R.string.lbl_home)) }
 					)
+					val userPreferences = koinInject<UserPreferences>()
+					if (userPreferences[UserPreferences.canopySeerrSearchEnabled]) {
+						Button(
+							onClick = {
+								if (activeButton != MainToolbarActiveButton.Discover) {
+									navigationRepository.navigate(Destinations.seerrDiscover)
+								}
+							},
+							colors = if (activeButton == MainToolbarActiveButton.Discover) activeButtonColors else ButtonDefaults.colors(),
+							content = { Text(stringResource(R.string.canopy_seerr_discover)) }
+						)
+					}
 					Button(
 						onClick = {
 							if (activeButton != MainToolbarActiveButton.Search) {

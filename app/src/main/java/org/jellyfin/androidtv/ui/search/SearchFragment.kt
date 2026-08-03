@@ -55,6 +55,12 @@ class SearchFragment : Fragment() {
 		val speechRecognizerAvailability = rememberSpeechRecognizerAvailability()
 
 		LaunchedEffect(Unit) {
+			viewModel.seerrResultsFlow.collect { entries ->
+				searchFragmentDelegate.showSeerrResults(entries)
+			}
+		}
+
+		LaunchedEffect(Unit) {
 			val extraQuery = arguments?.getString(EXTRA_QUERY)
 			if (!extraQuery.isNullOrBlank()) {
 				query = query.copy(text = extraQuery)

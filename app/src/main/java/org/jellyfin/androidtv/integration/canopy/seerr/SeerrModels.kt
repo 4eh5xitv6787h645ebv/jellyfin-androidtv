@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import java.util.UUID
 
 /**
- * Wire models for the Jellyfin Canopy Seerr proxy (`/JellyfinCanopy/seerr/*`).
+ * Wire models for the Jellyfin Canopy Seerr proxy (`/JellyfinCanopy/seerr/…`).
  *
  * These are the same authorized routes the Canopy web client uses. They are a
  * plain server proxy to Seerr, so property names follow Seerr's camelCase JSON.

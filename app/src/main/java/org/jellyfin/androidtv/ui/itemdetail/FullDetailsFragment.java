@@ -172,7 +172,9 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
         mRowsFragment.setOnItemViewSelectedListener(new ItemViewSelectedListener());
 
         mDorPresenter = new MyDetailsOverviewRowPresenter(markdownRenderer.getValue());
-        mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue());
+        if (userPreferences.getValue().get(UserPreferences.Companion.getCanopyItemActionsEnabled())) {
+            mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue());
+        }
 
         mItemId = Utils.uuidOrNull(getArguments().getString("ItemId"));
         mChannelId = Utils.uuidOrNull(getArguments().getString("ChannelId"));
@@ -489,7 +491,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
             updateInfo(detailsOverviewRow.getItem());
             addAdditionalRows(mRowsAdapter);
-            mCanopyController.bind(detailsOverviewRow.getItem().getId());
+            if (mCanopyController != null) mCanopyController.bind(detailsOverviewRow.getItem().getId());
 
         }
     }

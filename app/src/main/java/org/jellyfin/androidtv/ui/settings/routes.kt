@@ -1,6 +1,7 @@
 package org.jellyfin.androidtv.ui.settings
 
 import org.jellyfin.androidtv.ui.navigation.RouteComposable
+import org.jellyfin.androidtv.ui.settings.screen.SettingsCanopyScreen
 import org.jellyfin.androidtv.ui.settings.screen.SettingsDeveloperScreen
 import org.jellyfin.androidtv.ui.settings.screen.SettingsMainScreen
 import org.jellyfin.androidtv.ui.settings.screen.SettingsTelemetryScreen
@@ -103,6 +104,7 @@ object Routes {
 	const val PLAYBACK_CODEC = "/playback/codec"
 	const val PLAYBACK_AVC_LEVEL = "/playback/codec/avc-level"
 	const val PLAYBACK_HEVC_LEVEL = "/playback/codec/hevc-level"
+	const val CANOPY = "/canopy"
 	const val TELEMETRY = "/telemetry"
 	const val DEVELOPER = "/developer"
 	const val ABOUT = "/about"
@@ -136,6 +138,9 @@ val routes = mapOf<String, RouteComposable>(
 	},
 	Routes.AUTHENTICATION_AUTO_SIGN_IN to {
 		SettingsAuthenticationAutoSignInScreen()
+	},
+	Routes.CANOPY to {
+		SettingsCanopyScreen()
 	},
 	Routes.CUSTOMIZATION to {
 		SettingsCustomizationScreen()

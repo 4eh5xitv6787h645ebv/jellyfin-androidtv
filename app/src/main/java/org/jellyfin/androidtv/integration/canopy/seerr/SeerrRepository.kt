@@ -15,7 +15,7 @@ import timber.log.Timber
 import java.util.Locale
 
 /**
- * Client for the Canopy Seerr proxy routes (`/JellyfinCanopy/seerr/*`).
+ * Client for the Canopy Seerr proxy routes (`/JellyfinCanopy/seerr/…`).
  *
  * The native extension platform deliberately has no search or discovery
  * surface in protocol v1, so these consume the same authorized proxy routes
@@ -40,7 +40,7 @@ internal class SeerrRepository(
 	 * not permanently hide the integration.
 	 */
 	suspend fun capabilities(): SeerrCapabilities {
-		val currentUser = apiClient.userId?.toString()
+		val currentUser = apiClient.accessToken
 		val cached = cachedCapabilities
 		if (cached != null && capabilitiesUserId == currentUser) {
 			if (cached.available) return cached

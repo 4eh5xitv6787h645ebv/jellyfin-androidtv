@@ -10,16 +10,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
-import org.jellyfin.androidtv.integration.canopy.seerr.SeerrDiscoverItem
-import org.jellyfin.androidtv.integration.canopy.seerr.SeerrSearchRepository
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrBrowseMoreItem
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrEntry
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.preference.UserPreferences
 import org.jellyfin.sdk.model.api.BaseItemKind
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
-class SearchViewModel(
+internal class SearchViewModel(
 	private val searchRepository: SearchRepository,
-	private val seerrSearchRepository: SeerrSearchRepository,
+	private val seerrRepository: SeerrRepository,
 	private val userPreferences: UserPreferences,
 ) : ViewModel() {
 	companion object {
@@ -50,7 +51,7 @@ class SearchViewModel(
 	private val _searchResultsFlow = MutableStateFlow<Collection<SearchResultGroup>>(emptyList())
 	val searchResultsFlow = _searchResultsFlow.asStateFlow()
 
-	private val _seerrResultsFlow = MutableStateFlow<List<SeerrDiscoverItem>>(emptyList())
+	private val _seerrResultsFlow = MutableStateFlow<List<SeerrEntry>>(emptyList())
 	val seerrResultsFlow = _seerrResultsFlow.asStateFlow()
 
 	fun searchImmediately(query: String) = searchDebounced(query, 0.milliseconds)
@@ -92,11 +93,15 @@ class SearchViewModel(
 	 * Searches the Canopy Seerr proxy when the user preference is enabled and
 	 * Seerr is configured, reachable and linked for the current user. Any
 	 * other state degrades to an empty result, which hides the row entirely.
+	 * Non-empty results get a trailing tile linking to the Discover screen.
 	 */
-	private suspend fun searchSeerr(query: String): List<SeerrDiscoverItem> {
+	private suspend fun searchSeerr(query: String): List<SeerrEntry> {
 		if (!userPreferences[UserPreferences.canopySeerrSearchEnabled]) return emptyList()
-		if (!seerrSearchRepository.capabilities().available) return emptyList()
+		if (!seerrRepository.capabilities().available) return emptyList()
 
-		return seerrSearchRepository.search(query)
+		val results = seerrRepository.search(query)
+		if (results.isEmpty()) return emptyList()
+
+		return results + SeerrBrowseMoreItem
 	}
 }
