@@ -38,28 +38,41 @@ internal class SearchFragmentDelegate(
 	private var seerrEntries: List<SeerrEntry> = emptyList()
 
 	fun showResults(searchResultGroups: Collection<SearchResultGroup>) {
-		// Remove the library rows individually instead of clear(): the Seerr
-		// row must stay attached while it may hold focus (#4).
-		for (index in rowsAdapter.size() - 1 downTo 0) {
-			val row = rowsAdapter.get(index)
-			if (row !== seerrRow) rowsAdapter.removeAt(index)
-		}
+		// Diff the rows instead of clearing them. A removed row detaches its
+		// views, and if focus is inside one, the next key event walks a view
+		// that is no longer in the hierarchy and crashes focus traversal
+		// (#4, and again in Compose's embedded-view focus search). Rows keyed
+		// by header survive a new result set as the same row.
 		val adapters = mutableListOf<ItemRowAdapter>()
+		val rows = mutableListOf<Row>()
 		for ((labelRes, baseItems) in searchResultGroups) {
+			val row = ListRow(HeaderItem(context.getString(labelRes)), null)
 			val adapter = ItemRowAdapter(
 				context,
 				baseItems.toList(),
 				CardPresenter(),
 				rowsAdapter,
 				QueryType.Search
-			).apply {
-				setRow(ListRow(HeaderItem(context.getString(labelRes)), this))
-			}
+			)
+			val listRow = ListRow(row.headerItem, adapter)
+			adapter.setRow(listRow)
 			adapters.add(adapter)
+			rows.add(listRow)
 		}
+		if (seerrEntries.isNotEmpty()) rows.add(seerrRow)
+
+		rowsAdapter.replaceAll(
+			rows,
+			areItemsTheSame = { old, new -> old.rowHeaderKey() == new.rowHeaderKey() },
+			// Row contents are owned by each row's own adapter, so a row that
+			// keeps its identity never needs a rebind from here.
+			areContentsTheSame = { old, new -> old.rowHeaderKey() == new.rowHeaderKey() },
+		)
 		for (adapter in adapters) adapter.Retrieve()
 		updateSeerrRow()
 	}
+
+	private fun Row.rowHeaderKey(): String? = (this as? ListRow)?.headerItem?.name
 
 	fun showSeerrResults(entries: List<SeerrEntry>) {
 		seerrEntries = entries
@@ -80,6 +93,13 @@ internal class SearchFragmentDelegate(
 
 		seerrAdapter.setItems(seerrEntries, SEERR_DIFF)
 		if (rowsAdapter.indexOf(seerrRow) < 0) rowsAdapter.add(seerrRow)
+	}
+
+	/** Clears every row; used when the query is emptied. */
+	fun clearResults() {
+		seerrEntries = emptyList()
+		seerrAdapter.clear()
+		rowsAdapter.clear()
 	}
 
 	val onItemViewClickedListener = OnItemViewClickedListener { _, item, _, row ->
