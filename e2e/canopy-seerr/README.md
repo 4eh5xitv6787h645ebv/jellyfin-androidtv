@@ -30,7 +30,48 @@ Exit code 0 means every step passed.
 **Note:** the Request step submits a real request to the connected Seerr
 instance. Point the server at a development Seerr instance.
 
-## Driver (`atv_driver.py`)
+## Fast driver (`atv_driver_fast.py`) — recommended
+
+`e2e_seerr_surfaces.py` imports `atv_driver_fast` when available and silently
+falls back to `atv_driver`. The fast driver is a drop-in replacement with the
+same API, measured on a Shield TV over WiFi adb:
+
+| Operation | `atv_driver` | `atv_driver_fast` | speedup |
+|---|---:|---:|---:|
+| UI read (dump + parse) | 2.23 s | 0.13 s | ~17x |
+| Key event | 86 ms | 0.1 ms | ~800x |
+| Full 15-step suite | ~35 min | ~6 min | ~6x |
+
+How it gets there:
+
+- **Reads** use uiautomator2's persistent on-device accessibility server
+  instead of spawning `uiautomator dump` per read. This also eliminates the
+  `null root node` flake entirely.
+- **Input** goes through scrcpy's control socket (stock server jar, started
+  control-only) as small binary messages, instead of one `adb shell input`
+  process per keypress. No root required.
+- **Shell** commands reuse a single persistent `adb shell` with sentinel
+  framing.
+- Cheap reads make polling affordable, so fixed `sleep()`s were replaced with
+  `wait_text()`-style waits — which is where most of the wall-clock win comes
+  from.
+
+Setup (one time):
+
+```
+python3 -m venv speedvenv
+./speedvenv/bin/pip install uiautomator2
+./speedvenv/bin/python e2e_seerr_surfaces.py <serial> [package]
+```
+
+Plain `python3` also works if `uiautomator2` is importable; the driver adds a
+sibling `speedvenv` to `sys.path` automatically when present.
+
+`bench_fast.py` reproduces the table above; `REPORT.md` records the full
+investigation, including measured dead ends (raw `exec-out` dumps, `cmd input`
+over a persistent shell, evdev injection — SELinux-blocked without root).
+
+## Baseline driver (`atv_driver.py`)
 
 Reusable dpad-first UI driver:
 
