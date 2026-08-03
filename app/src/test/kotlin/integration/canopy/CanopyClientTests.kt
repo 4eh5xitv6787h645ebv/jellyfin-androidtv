@@ -33,6 +33,37 @@ class CanopyClientTests : FunSpec({
 		transport.lastRequest?.maximumResponseBytes shouldBe CanopyContractBounds.MAX_ACTION_BYTES
 	}
 
+	test("a deprecated route is reported once, and only when the host says so") {
+		val logs = mutableListOf<String>()
+		val tree = object : timber.log.Timber.Tree() {
+			override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+				logs += message
+			}
+		}
+		timber.log.Timber.plant(tree)
+		try {
+			val headers = jsonHeaders() + mapOf(
+				"Deprecation" to listOf("@1893456000"),
+				"Sunset" to listOf("Wed, 01 Jan 2031 00:00:00 GMT"),
+			)
+			val client = CanopyClient(FixtureTransport(response(200, fixture("discovery.200.json"), headers)))
+
+			client.discover()
+			client.discover()
+
+			val notices = logs.filter { "deprecated" in it }
+			notices.size shouldBe 1
+			notices.single().contains("Sunset") shouldBe true
+
+			// A host that sends no Deprecation header must produce no notice.
+			logs.clear()
+			CanopyClient(FixtureTransport(response(200, fixture("discovery.200.json")))).discover()
+			logs.none { "deprecated" in it } shouldBe true
+		} finally {
+			timber.log.Timber.uproot(tree)
+		}
+	}
+
 	test("a platform reporting itself unavailable is absent") {
 		val unavailable = fixture("discovery.200.json").replace("\"Available\": true", "\"Available\": false")
 		CanopyClient(FixtureTransport(response(200, unavailable))).discover() shouldBe CanopyCallResult.Absent

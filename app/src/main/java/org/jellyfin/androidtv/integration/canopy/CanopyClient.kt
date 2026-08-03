@@ -131,6 +131,9 @@ internal class CanopyClient internal constructor(
 ) : CanopyGateway {
 	constructor(apiClient: ApiClient) : this(ApiClientCanopyTransport(apiClient))
 
+	// Routes whose deprecation notice has already been logged this process.
+	private val reportedDeprecations = mutableSetOf<String>()
+
 	override suspend fun discover(): CanopyCallResult<CanopyDiscovery> {
 		val result = get<CanopyDiscoveryWire, CanopyDiscoveryWire>(
 			path = CanopyPlatformRoutes.discovery.encodedPath,
@@ -299,6 +302,8 @@ internal class CanopyClient internal constructor(
 			return invalidResponse(response.status)
 		}
 
+		response.reportDeprecation(path)
+
 		return try {
 			val wire = json.decodeFromString<W>(responseText)
 			CanopyCallResult.Success(mapper(wire), response.etag())
@@ -366,6 +371,27 @@ internal class CanopyClient internal constructor(
 		?.singleOrNull()
 
 	private fun CanopyHttpResponse.etag(): String? = singleHeaderValue("ETag")?.takeIf(STRONG_ETAG::matches)
+
+	/**
+	 * Surfaces a host's Deprecation/Sunset headers for a Platform operation.
+	 *
+	 * A client that ignores these keeps working right up until the sunset date
+	 * and then fails with no warning, so the notice is logged as soon as the
+	 * host starts sending it. It is logged once per route per process: this is
+	 * a signal for whoever maintains the client, not something a viewer can
+	 * act on, so it must never become per-request noise or reach the UI.
+	 */
+	private fun CanopyHttpResponse.reportDeprecation(path: String) {
+		val deprecation = singleHeaderValue("Deprecation") ?: return
+		if (!reportedDeprecations.add(path)) return
+		val sunset = singleHeaderValue("Sunset")
+		Timber.w(
+			"Canopy platform route %s is deprecated (Deprecation: %s, Sunset: %s); migrate before the sunset date",
+			path,
+			deprecation,
+			sunset ?: "unspecified",
+		)
+	}
 
 	private fun CanopyHttpResponse.hasJsonContentType(): Boolean = singleHeaderValue("Content-Type")
 		?.substringBefore(';')
