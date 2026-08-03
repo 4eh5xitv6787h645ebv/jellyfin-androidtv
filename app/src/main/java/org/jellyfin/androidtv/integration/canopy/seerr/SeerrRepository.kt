@@ -329,10 +329,10 @@ internal class SeerrRepository(
 	}
 
 	private suspend fun submit(path: String, body: Any): SeerrRequestOutcome = try {
-		withContext(Dispatchers.IO) {
-			apiClient.request(HttpMethod.POST, path, emptyMap(), emptyMap(), body)
+		val responseBody = withContext(Dispatchers.IO) {
+			apiClient.request(HttpMethod.POST, path, emptyMap(), emptyMap(), body).body
 		}
-		SeerrRequestOutcome.Submitted
+		parseRequestOutcome(responseBody) ?: SeerrRequestOutcome.Submitted
 	} catch (error: InvalidStatusException) {
 		Timber.d(error, "Seerr request rejected with status %d", error.status)
 		when (error.status) {
@@ -342,6 +342,25 @@ internal class SeerrRepository(
 	} catch (error: ApiClientException) {
 		Timber.w(error, "Seerr request failed")
 		SeerrRequestOutcome.Failed(null)
+	}
+
+	/**
+	 * Maps Canopy's structured request-outcome envelope when present; null for
+	 * legacy servers that return the raw Seerr response (treated as success by
+	 * the caller, matching the pre-envelope contract).
+	 */
+	private fun parseRequestOutcome(responseBody: ByteArray): SeerrRequestOutcome? = try {
+		val dto = json.decodeFromString<SeerrRequestOutcomeDto>(responseBody.decodeToString())
+		when (dto.outcome) {
+			null -> null
+			OUTCOME_SUBMITTED -> SeerrRequestOutcome.Submitted
+			OUTCOME_ALREADY_REQUESTED -> SeerrRequestOutcome.AlreadyRequested
+			else ->
+				if (dto.submitted) SeerrRequestOutcome.Submitted
+				else SeerrRequestOutcome.Failed(dto.message?.takeIf { it.isNotBlank() })
+		}
+	} catch (error: SerializationException) {
+		null
 	}
 
 	private suspend fun discover(path: String): List<SeerrDiscoverItem> = list(
@@ -488,6 +507,8 @@ internal class SeerrRepository(
 		private const val MAX_CREDITS_RESULTS = 50
 		private const val YEAR_LENGTH = 4
 		private const val CONFLICT_STATUS = 409
+		private const val OUTCOME_SUBMITTED = "submitted"
+		private const val OUTCOME_ALREADY_REQUESTED = "already_requested"
 		private const val NEGATIVE_STATUS_TTL_MS = 60_000L
 		private const val PERSON_MEDIA_TYPE = "person"
 		private const val TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w400"

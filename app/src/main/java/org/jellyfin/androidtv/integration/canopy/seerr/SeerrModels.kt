@@ -133,6 +133,19 @@ internal data class SeerrRequestSettingsDto(
 	val partialRequestsEnabled: Boolean = true,
 )
 
+/**
+ * Structured request outcome introduced by Canopy for native clients
+ * (Jellyfin-Canopy #627). Older servers return the raw Seerr response
+ * instead; absence of [outcome] means the envelope is not in use.
+ */
+@Serializable
+internal data class SeerrRequestOutcomeDto(
+	val outcome: String? = null,
+	val submitted: Boolean = false,
+	val retryable: Boolean = false,
+	val message: String? = null,
+)
+
 @Serializable
 internal data class SeerrMediaDetailsDto(
 	val id: Long? = null,

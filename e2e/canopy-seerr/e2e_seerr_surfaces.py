@@ -217,7 +217,11 @@ def main():
 		if d.dpad_until(lambda _t: (d._focused_row_header() or '').startswith('Cast'), atv.KEY_DOWN, 12):
 			d.key(atv.KEY_CENTER)
 			time.sleep(12)
-			more_from = d.has_text('More from')
+			# the Seerr filmography row sits below the library rows; scroll to it
+			more_from = d.dpad_until(
+				lambda _t: (d._focused_row_header() or '').startswith('More from'),
+				atv.KEY_DOWN, 10,
+			)
 			save_evidence('10-native-person-more-from')
 	step('native person screen shows Seerr More from row', more_from)
 

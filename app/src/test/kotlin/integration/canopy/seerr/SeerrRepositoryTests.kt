@@ -299,6 +299,32 @@ class SeerrRepositoryTests : FunSpec({
 		repository.partialRequestsEnabled() shouldBe false
 	}
 
+	test("request outcome envelope is honored and legacy bodies stay successful") {
+		val apiClient = mockk<ApiClient>()
+		every { apiClient.accessToken } returns "token"
+		val item = SeerrDiscoverItem(550, SeerrMediaType.MOVIE, "x", null, null,
+			SeerrMediaStatus.NOT_REQUESTED, SeerrMediaStatus.NOT_REQUESTED, null)
+		val repository = SeerrRepository(apiClient)
+		fun answerBody(body: String) {
+			coEvery {
+				apiClient.request(HttpMethod.POST, "/JellyfinCanopy/seerr/request", emptyMap(), emptyMap(), any())
+			} returns RawResponse(body.encodeToByteArray(), 200, emptyMap())
+		}
+
+		answerBody("""{"outcome":"submitted","submitted":true,"retryable":false,"sourceStatus":201}""")
+		repository.submitRequest(item, false) shouldBe SeerrRequestOutcome.Submitted
+
+		answerBody("""{"outcome":"already_requested","submitted":false}""")
+		repository.submitRequest(item, false) shouldBe SeerrRequestOutcome.AlreadyRequested
+
+		answerBody("""{"outcome":"quota_exceeded","submitted":false,"message":"Request quota exceeded"}""")
+		repository.submitRequest(item, false) shouldBe SeerrRequestOutcome.Failed("Request quota exceeded")
+
+		// legacy proxy: raw Seerr request object, no envelope
+		answerBody("""{"id":123,"status":1,"media":{"tmdbId":550}}""")
+		repository.submitRequest(item, false) shouldBe SeerrRequestOutcome.Submitted
+	}
+
 	test("media status wire mapping") {
 		SeerrMediaStatus.fromWire(null) shouldBe SeerrMediaStatus.NOT_REQUESTED
 		SeerrMediaStatus.fromWire(1) shouldBe SeerrMediaStatus.NOT_REQUESTED
