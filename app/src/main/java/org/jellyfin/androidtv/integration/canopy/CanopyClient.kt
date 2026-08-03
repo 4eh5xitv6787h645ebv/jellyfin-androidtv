@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpMethod
+import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import timber.log.Timber
 
@@ -20,7 +21,7 @@ internal enum class CanopyBodyReadMode {
 	/** The SDK reported a non-success status without exposing its response body. */
 	SDK_STATUS_ONLY,
 
-	/** Reserved for a future ApiClient response API that enforces its cap while reading. */
+	/** The shared SDK client bounded this exact Platform response while reading. */
 	BOUNDED_DURING_READ,
 }
 
@@ -51,17 +52,17 @@ internal class ApiClientCanopyTransport(
 		body: JsonElement?,
 		maximumResponseBytes: Int,
 	): CanopyHttpResponse {
-		// SDK 1.8.12 has no bounded response API: request() calls ResponseBody.bytes().
-		// The smallest safe SDK seam is an ApiClient request overload accepting a
-		// maximumResponseBytes value and enforcing it while reading the response source.
-		// That seam should also preserve status, headers, and the bounded body for non-2xx.
 		return try {
 			val response = apiClient.request(method, path, emptyMap(), query, body)
 			CanopyHttpResponse(
 				status = response.status,
 				body = response.body,
 				headers = response.headers,
-				bodyReadMode = CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK,
+				bodyReadMode = if (response.wasBoundedDuringRead()) {
+					CanopyBodyReadMode.BOUNDED_DURING_READ
+				} else {
+					CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK
+				},
 			)
 		} catch (error: InvalidStatusException) {
 			CanopyHttpResponse(
@@ -70,8 +71,21 @@ internal class ApiClientCanopyTransport(
 				headers = emptyMap(),
 				bodyReadMode = CanopyBodyReadMode.SDK_STATUS_ONLY,
 			)
+		} catch (error: ApiClientException) {
+			val bounded = error.exactCanopyBoundedResponseOrNull() ?: throw error
+			CanopyHttpResponse(
+				status = bounded.status,
+				body = bounded.body,
+				headers = bounded.headers,
+				bodyReadMode = CanopyBodyReadMode.BOUNDED_DURING_READ,
+			)
 		}
 	}
+
+	private fun org.jellyfin.sdk.api.client.RawResponse.wasBoundedDuringRead() = headers.entries
+		.firstOrNull { (name) -> name.equals(CanopyResponseBoundingInterceptor.BOUNDED_HEADER, ignoreCase = true) }
+		?.value
+		?.singleOrNull() == CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
 }
 
 /**
@@ -81,9 +95,8 @@ internal class ApiClientCanopyTransport(
  * a second HTTP or authentication stack. It also never accepts a URL, provider
  * operation, acting user, or access token from a caller.
  *
- * Contract byte limits are checked before decoding, but SDK 1.8.x has already
- * buffered successful bodies at that point. [CanopyBodyReadMode] makes this
- * allocation limitation explicit until the SDK exposes a bounded read seam.
+ * The shared SDK factory installs a route-exact interceptor that enforces contract
+ * byte limits while reading, before SDK 1.8.x materializes its RawResponse.
  */
 internal interface CanopyGateway {
 	suspend fun discover(): CanopyCallResult<CanopyDiscovery>
@@ -108,8 +121,8 @@ internal class CanopyClient internal constructor(
 
 	override suspend fun discover(): CanopyCallResult<CanopyDiscovery> {
 		val result = get<CanopyDiscoveryWire, CanopyDiscoveryWire>(
-			path = DISCOVERY_PATH,
-			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			path = CanopyPlatformRoutes.discovery.encodedPath,
+			maximumBytes = CanopyPlatformRoutes.discovery.maximumResponseBytes,
 			emptyNotFoundIsAbsent = true,
 			mapper = { it },
 		)
@@ -138,12 +151,12 @@ internal class CanopyClient internal constructor(
 			return invalidResponse()
 		}
 		return get(
-			path = NEGOTIATE_PATH,
+			path = CanopyPlatformRoutes.negotiate.encodedPath,
 			query = mapOf(
 				"protocolMinimum" to protocolMinimum,
 				"protocolMaximum" to protocolMaximum,
 			),
-			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			maximumBytes = CanopyPlatformRoutes.negotiate.maximumResponseBytes,
 			mapper = { wire: CanopyNegotiationWire ->
 				CanopyContractMapper.negotiation(wire).also { negotiation ->
 					if (negotiation.compatible && negotiation.protocol !in protocolMinimum..protocolMaximum) {
@@ -171,18 +184,18 @@ internal class CanopyClient internal constructor(
 			),
 		)
 		return post(
-			path = RESOLVE_PATH,
+			path = CanopyPlatformRoutes.resolveItemDetail.encodedPath,
 			request = json.encodeToJsonElement(request),
-			maximumBytes = CanopyContractBounds.MAX_RESOLVE_BYTES,
+			maximumBytes = CanopyPlatformRoutes.resolveItemDetail.maximumResponseBytes,
 			mapper = CanopyContractMapper::resolvedSurface,
 		)
 	}
 
 	override suspend fun prepare(prepareHandle: CanopyPrepareHandle): CanopyCallResult<CanopyPreparedAction> {
 		return post(
-			path = PREPARE_PATH,
+			path = CanopyPlatformRoutes.prepare.encodedPath,
 			request = json.encodeToJsonElement(CanopyPrepareRequestWire(prepareHandle.wireValue())),
-			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			maximumBytes = CanopyPlatformRoutes.prepare.maximumResponseBytes,
 			mapper = CanopyContractMapper::preparedAction,
 		)
 	}
@@ -201,9 +214,9 @@ internal class CanopyClient internal constructor(
 			return invalidResponse()
 		}
 		return post(
-			path = INVOKE_PATH,
+			path = CanopyPlatformRoutes.invoke.encodedPath,
 			request = json.encodeToJsonElement(request),
-			maximumBytes = CanopyContractBounds.MAX_ACTION_BYTES,
+			maximumBytes = CanopyPlatformRoutes.invoke.maximumResponseBytes,
 			mapper = CanopyContractMapper::invokeResult,
 		)
 	}
@@ -359,12 +372,6 @@ internal class CanopyClient internal constructor(
 		const val MAX_JSON_DEPTH = 8
 		const val PROTOCOL_VERSION = 1
 		const val ITEM_DETAIL_SCHEMA = 1
-		const val PREFIX = "/JellyfinCanopy/Platform/v1"
-		const val DISCOVERY_PATH = "$PREFIX/discovery"
-		const val NEGOTIATE_PATH = "$PREFIX/negotiate"
-		const val RESOLVE_PATH = "$PREFIX/surfaces/item-detail/resolve"
-		const val PREPARE_PATH = "$PREFIX/actions/prepare"
-		const val INVOKE_PATH = "$PREFIX/actions/invoke"
 		val STRONG_ETAG = Regex("^\"sha256-[0-9a-f]{64}\"$")
 	}
 }

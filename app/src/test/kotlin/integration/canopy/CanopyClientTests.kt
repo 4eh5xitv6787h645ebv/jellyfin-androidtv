@@ -10,6 +10,7 @@ import io.kotest.matchers.maps.shouldContain
 import io.kotest.matchers.shouldBe
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
@@ -36,17 +37,21 @@ class CanopyClientTests : FunSpec({
 		CanopyClient(FixtureTransport(response(200, unavailable))).discover() shouldBe CanopyCallResult.Absent
 	}
 
-	test("ApiClient transport reuses the session client and passes JsonElement for SDK application json encoding") {
+	test("ApiClient transport reuses the bounded session client and passes JsonElement for SDK application json encoding") {
 		val apiClient = mockk<ApiClient>()
 		val payload = FIXTURE_JSON.parseToJsonElement("""{"PrepareHandle":"opaque"}""")
 		coEvery {
 			apiClient.request(HttpMethod.POST, "/bounded", emptyMap(), emptyMap(), payload)
-		} returns RawResponse("{}".encodeToByteArray(), 200, jsonHeaders())
+		} returns RawResponse(
+			"{}".encodeToByteArray(),
+			200,
+			jsonHeaders() + mapOf(CanopyResponseBoundingInterceptor.BOUNDED_HEADER to listOf("1")),
+		)
 		val transport = ApiClientCanopyTransport(apiClient)
 
 		val result = transport.request(HttpMethod.POST, "/bounded", emptyMap(), payload, 32)
 
-		result.bodyReadMode shouldBe CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK
+		result.bodyReadMode shouldBe CanopyBodyReadMode.BOUNDED_DURING_READ
 		coVerify(exactly = 1) {
 			apiClient.request(HttpMethod.POST, "/bounded", emptyMap(), emptyMap(), payload)
 		}
@@ -239,6 +244,32 @@ class CanopyClientTests : FunSpec({
 		(action.fields[3] as CanopyField.MultiSelect).maximumSelections shouldBe 2
 	}
 
+	test("multi-select maximum is bounded by enabled options") {
+		val malformed = fixture("prepare.all-field-kinds.200.json")
+			.replace(
+				"{\"Id\": \"y\", \"Label\": \"Target Y\"}",
+				"{\"Id\": \"y\", \"Label\": \"Target Y\", \"Disabled\": true}",
+			)
+
+		CanopyClient(FixtureTransport(response(200, malformed))).prepare(prepareHandle()) shouldBe invalidResponse()
+	}
+
+	test("omitted multi-select maximum derives from enabled options") {
+		val boundedDefault = fixture("prepare.all-field-kinds.200.json")
+			.replace(
+				"{\"Id\": \"y\", \"Label\": \"Target Y\"}",
+				"{\"Id\": \"y\", \"Label\": \"Target Y\", \"Disabled\": true}",
+			)
+			.replace(
+				"      \"MinimumSelections\": 0,\n      \"MaximumSelections\": 2\n",
+				"      \"MinimumSelections\": 0\n",
+			)
+		val result = CanopyClient(FixtureTransport(response(200, boundedDefault))).prepare(prepareHandle())
+
+		val action = (result as CanopyCallResult.Success).value
+		(action.fields[3] as CanopyField.MultiSelect).maximumSelections shouldBe 1
+	}
+
 	test("an unknown field kind disables the prepared action") {
 		val fixture = fixture("prepare.all-field-kinds.200.json")
 			.replace("\"confirmation\"", "\"future_field\"")
@@ -429,7 +460,7 @@ class CanopyClientTests : FunSpec({
 		)
 	}
 
-	test("an oversized SDK-buffered body is rejected before JSON decoding but after allocation") {
+	test("an oversized fallback transport body is rejected before JSON decoding") {
 		val body = ByteArray(CanopyContractBounds.MAX_ACTION_BYTES + 1) { 'x'.code.toByte() }
 		val result = CanopyClient(
 			FixtureTransport(
@@ -462,6 +493,12 @@ class CanopyClientTests : FunSpec({
 	test("transport failures do not escape into the item screen") {
 		val transport = CanopyTransport { _, _, _, _, _ -> error("offline") }
 		CanopyClient(transport).discover() shouldBe CanopyCallResult.Failure(CanopyFailureKind.TRANSPORT)
+	}
+
+	test("structured coroutine cancellation remains cancellation") {
+		val transport = CanopyTransport { _, _, _, _, _ -> throw CancellationException("cancel") }
+
+		shouldThrow<CancellationException> { CanopyClient(transport).discover() }
 	}
 })
 

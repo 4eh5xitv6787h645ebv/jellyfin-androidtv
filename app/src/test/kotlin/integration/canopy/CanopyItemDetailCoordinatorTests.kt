@@ -86,8 +86,89 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 			coordinator(gateway, events).bind(ITEM_ONE)
 
 			gateway.calls shouldContainExactly listOf("discover")
-			events shouldContainExactly listOf(CanopyItemDetailEvent.Surface(null))
+			events shouldContainExactly listOf(
+				CanopyItemDetailEvent.InvalidateForm,
+				CanopyItemDetailEvent.Surface(null),
+			)
 		}
+	}
+
+	test("same-item rebind preserves form ownership and reattaches the cached surface") {
+		val gateway = FakeGateway()
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+
+		coordinator.bind(ITEM_ONE)
+		coordinator.prepare("usable")
+		val prepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().single().value
+		val callsBeforeRebind = gateway.calls.toList()
+		coordinator.bind(ITEM_ONE)
+		coordinator.submit(prepared, prepared.form.setChecked("confirm", true))
+
+		gateway.calls.take(callsBeforeRebind.size) shouldContainExactly callsBeforeRebind
+		gateway.calls.count { it == "invoke" } shouldBe 1
+		events.filterIsInstance<CanopyItemDetailEvent.InvalidateForm>().size shouldBe 1
+	}
+
+	test("external refresh queues behind an owned form and runs when the dialog dismisses it") {
+		val gateway = FakeGateway()
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+
+		coordinator.bind(ITEM_ONE)
+		coordinator.prepare("usable")
+		val prepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().single().value
+		val resolveCallsBeforeRefresh = gateway.calls.count { it.startsWith("resolve:") }
+
+		coordinator.requestSurfaceRefresh()
+		gateway.calls.count { it.startsWith("resolve:") } shouldBe resolveCallsBeforeRefresh
+		coordinator.dismissForm(prepared)
+
+		gateway.calls.count { it.startsWith("resolve:") } shouldBe resolveCallsBeforeRefresh + 1
+		events.filterIsInstance<CanopyItemDetailEvent.InvalidateForm>().size shouldBe 1
+		events.filterIsInstance<CanopyItemDetailEvent.Surface>().count { it.value == null } shouldBe 1
+	}
+
+	test("refresh suppresses only an exactly unchanged resolve representation and ETag") {
+		val etagOne = "\"sha256-${"a".repeat(64)}\""
+		val etagTwo = "\"sha256-${"b".repeat(64)}\""
+		var response = CanopyCallResult.Success(surface("Use action"), etag = etagOne)
+		val gateway = FakeGateway().apply { resolve = { response } }
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+
+		coordinator.bind(ITEM_ONE)
+		coordinator.requestSurfaceRefresh()
+		events.filterIsInstance<CanopyItemDetailEvent.Surface>().mapNotNull { it.value }.size shouldBe 1
+
+		response = CanopyCallResult.Success(surface("Use action"), etag = etagTwo)
+		coordinator.requestSurfaceRefresh()
+		events.filterIsInstance<CanopyItemDetailEvent.Surface>().mapNotNull { it.value }.size shouldBe 2
+
+		response = CanopyCallResult.Success(
+			surface("Use action", prepareHandle = "replacement-handle"),
+			etag = etagTwo,
+		)
+		coordinator.requestSurfaceRefresh()
+		coordinator.prepare("usable")
+
+		events.filterIsInstance<CanopyItemDetailEvent.Surface>().mapNotNull { it.value }.size shouldBe 3
+		gateway.preparedHandles shouldContainExactly listOf("replacement-handle")
+	}
+
+	test("an item switch invalidates form ownership and the stale form cannot submit") {
+		val gateway = FakeGateway()
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+
+		coordinator.bind(ITEM_ONE)
+		coordinator.prepare("usable")
+		val prepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().single().value
+		coordinator.bind(ITEM_TWO)
+		coordinator.submit(prepared, prepared.form.setChecked("confirm", true))
+
+		gateway.calls.count { it == "invoke" } shouldBe 0
+		events.filterIsInstance<CanopyItemDetailEvent.InvalidateForm>().size shouldBe 2
 	}
 
 	test("an item switch prevents a late old generation from replacing the new surface") {
@@ -322,6 +403,7 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 
 private class FakeGateway : CanopyGateway {
 	val calls = mutableListOf<String>()
+	val preparedHandles = mutableListOf<String>()
 	val invocationKeys = mutableListOf<UUID>()
 	val invocationAnswers = mutableListOf<List<CanopyAnswer>>()
 	var discovery: CanopyCallResult<CanopyDiscovery> = CanopyCallResult.Success(CanopyDiscovery(1, 1))
@@ -353,6 +435,7 @@ private class FakeGateway : CanopyGateway {
 
 	override suspend fun prepare(prepareHandle: CanopyPrepareHandle): CanopyCallResult<CanopyPreparedAction> {
 		calls += "prepare"
+		preparedHandles += prepareHandle.wireValue()
 		return prepareResponse()
 	}
 
@@ -380,22 +463,26 @@ private fun coordinator(
 	onEvent = events::add,
 )
 
-private fun surface(actionLabel: String) = CanopyResolvedSurface(
-	catalogRevision = "r1",
+private fun surface(
+	actionLabel: String,
+	catalogRevision: String = "r1",
+	prepareHandle: String = "handle-usable",
+) = CanopyResolvedSurface(
+	catalogRevision = catalogRevision,
 	contributions = listOf(
-		usableAction("usable", actionLabel),
+		usableAction("usable", actionLabel, prepareHandle),
 		CanopyContribution.Action("disabled", "Disabled", null, CanopySemanticIcon.DEFAULT, false, null),
 		CanopyContribution.Status("status", "Available", CanopyTone.POSITIVE),
 	),
 )
 
-private fun usableAction(id: String, label: String) = CanopyContribution.Action(
+private fun usableAction(id: String, label: String, prepareHandle: String = "handle-$id") = CanopyContribution.Action(
 	id = id,
 	label = label,
 	description = null,
 	icon = CanopySemanticIcon.DEFAULT,
 	enabled = true,
-	prepareHandle = CanopyPrepareHandle("handle-$id"),
+	prepareHandle = CanopyPrepareHandle(prepareHandle),
 )
 
 private fun preparedAction(expiresAt: Instant = NOW.plusSeconds(60)) = CanopyPreparedAction(

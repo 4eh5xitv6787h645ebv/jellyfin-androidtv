@@ -249,9 +249,13 @@ internal object CanopyContractMapper {
 					defaults.all { default -> options.any { it.id == default && !it.disabled } },
 					"Multi-select default was not an enabled option",
 				)
+				val enabledOptionCount = options.count { !it.disabled }
 				val minimum = wire.minimumSelections ?: 0
-				val maximum = wire.maximumSelections ?: options.size
-				requireContract(minimum >= 0 && maximum >= minimum && maximum <= options.size, "Invalid multi-select range")
+				val maximum = wire.maximumSelections ?: enabledOptionCount
+				requireContract(
+					minimum >= 0 && maximum >= minimum && maximum <= enabledOptionCount,
+					"Invalid multi-select range",
+				)
 				requireContract(defaults.size in minimum..maximum, "Multi-select defaults violated its range")
 				CanopyField.MultiSelect(id, label, description, wire.required, options, defaults, minimum, maximum)
 			}

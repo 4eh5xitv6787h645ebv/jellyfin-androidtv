@@ -20,6 +20,9 @@ import androidx.leanback.widget.HeaderItem
 import androidx.leanback.widget.ListRow
 import androidx.leanback.widget.Presenter
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.data.model.DataRefreshService
 import org.jellyfin.androidtv.integration.canopy.CanopyActionForm
@@ -29,6 +32,7 @@ import org.jellyfin.androidtv.integration.canopy.CanopyContribution
 import org.jellyfin.androidtv.integration.canopy.CanopyField
 import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailCoordinator
 import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailEvent
+import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailInvalidation
 import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailSurface
 import org.jellyfin.androidtv.integration.canopy.CanopyPreparedForm
 import org.jellyfin.androidtv.integration.canopy.CanopyRefreshTarget
@@ -51,20 +55,27 @@ internal class CanopyItemDetailController(
 		onEvent = ::handleEvent,
 	)
 	private var dialog: AlertDialog? = null
-	private var submitButton: View? = null
+	private var submitButton: TextView? = null
 	private var formContent: View? = null
 	private var formInteractionState = CanopyFormInteractionState.EDITING
+	private var activeSubmitLabel: String? = null
 	private var overflowActions = emptyList<CanopyContribution.Action>()
+
+	init {
+		fragment.lifecycleScope.launch {
+			fragment.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+				CanopyItemDetailInvalidation(apiClient.webSocket).signals().collect {
+					coordinator.requestSurfaceRefresh()
+				}
+			}
+		}
+	}
 
 	fun bind(itemId: UUID) = coordinator.bind(itemId)
 
 	fun stop() {
 		coordinator.stop()
-		dialog?.dismiss()
-		dialog = null
-		submitButton = null
-		formContent = null
-		formInteractionState = CanopyFormInteractionState.EDITING
+		dismissDialog()
 	}
 
 	fun handleClick(item: Any?): Boolean = when (item) {
@@ -83,26 +94,42 @@ internal class CanopyItemDetailController(
 		when (event) {
 			is CanopyItemDetailEvent.Surface -> showSurface(event.value)
 			is CanopyItemDetailEvent.Form -> showForm(event.value)
+			CanopyItemDetailEvent.InvalidateForm -> dismissDialog()
 			CanopyItemDetailEvent.Submitting -> {
 				formInteractionState = formInteractionState.submitting()
-				applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
+				applyCanopyFormInteractionState(
+					formContent,
+					submitButton,
+					formInteractionState,
+					activeSubmitLabel,
+					fragment.getString(R.string.loading),
+					announceLoading = true,
+				)
 			}
 			is CanopyItemDetailEvent.InvalidForm -> {
-				applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
+				applyCanopyFormInteractionState(
+					formContent,
+					submitButton,
+					formInteractionState,
+					activeSubmitLabel,
+					fragment.getString(R.string.loading),
+				)
 				val context = fragment.context ?: return
 				Toast.makeText(context, R.string.canopy_complete_required_fields, Toast.LENGTH_LONG).show()
 			}
 			is CanopyItemDetailEvent.Message -> {
 				val terminal = event.fallback != CanopyItemDetailEvent.Message.Fallback.ACTION_UNAVAILABLE
 				if (terminal) {
-					dialog?.dismiss()
-					dialog = null
-					submitButton = null
-					formContent = null
-					formInteractionState = CanopyFormInteractionState.EDITING
+					dismissDialog()
 				} else {
 					formInteractionState = formInteractionState.failed()
-					applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
+					applyCanopyFormInteractionState(
+						formContent,
+						submitButton,
+						formInteractionState,
+						activeSubmitLabel,
+						fragment.getString(R.string.loading),
+					)
 				}
 				val context = fragment.context ?: return
 				val fallback = when (event.fallback) {
@@ -179,8 +206,12 @@ internal class CanopyItemDetailController(
 	}
 
 	private fun showForm(prepared: CanopyPreparedForm) {
-		if (!fragment.isAdded) return
+		if (!fragment.isAdded) {
+			coordinator.dismissForm(prepared)
+			return
+		}
 		var form = startForm(prepared)
+		activeSubmitLabel = prepared.action.submitLabel
 		val fieldViews = mutableMapOf<String, View>()
 		val content = LinearLayout(fragment.requireContext()).apply {
 			orientation = LinearLayout.VERTICAL
@@ -225,7 +256,13 @@ internal class CanopyItemDetailController(
 					}
 				}
 			}
-			applyCanopyFormInteractionState(formContent, submitButton, formInteractionState)
+			applyCanopyFormInteractionState(
+				formContent,
+				submitButton,
+				formInteractionState,
+				activeSubmitLabel,
+				fragment.getString(R.string.loading),
+			)
 			fieldViews.values.firstOrNull()?.requestFocus()
 		}
 		created.setOnDismissListener {
@@ -234,6 +271,8 @@ internal class CanopyItemDetailController(
 				submitButton = null
 				formContent = null
 				formInteractionState = CanopyFormInteractionState.EDITING
+				activeSubmitLabel = null
+				coordinator.dismissForm(prepared)
 			}
 		}
 		dialog = created
@@ -317,6 +356,15 @@ internal class CanopyItemDetailController(
 		return prepared.form
 	}
 
+	private fun dismissDialog() {
+		dialog?.dismiss()
+		dialog = null
+		submitButton = null
+		formContent = null
+		formInteractionState = CanopyFormInteractionState.EDITING
+		activeSubmitLabel = null
+	}
+
 	private fun refresh(event: CanopyItemDetailEvent.Refresh) {
 		dispatchCanopyRefresh(
 			targets = event.targets,
@@ -382,6 +430,8 @@ internal enum class CanopyFormInteractionState(
 ) {
 	EDITING(formEditable = true, submitEnabled = true),
 	SUBMITTING(formEditable = false, submitEnabled = false),
+	// Retry is deliberately an exact replay of the first answers and idempotency key.
+	// Dismiss and prepare again to edit or obtain a new capability/key.
 	RETRY(formEditable = false, submitEnabled = true),
 	;
 
@@ -391,12 +441,32 @@ internal enum class CanopyFormInteractionState(
 
 private fun applyCanopyFormInteractionState(
 	formContent: View?,
-	submitButton: View?,
+	submitButton: TextView?,
 	state: CanopyFormInteractionState,
+	submitLabel: String?,
+	loadingLabel: String,
+	announceLoading: Boolean = false,
 ) {
 	formContent?.setCanopyFormControlsEnabled(state.formEditable)
-	submitButton?.isEnabled = state.submitEnabled
+	submitButton?.apply {
+		isEnabled = state.submitEnabled
+		val presentationLabel = canopySubmitButtonLabel(state, submitLabel, loadingLabel)
+		text = presentationLabel
+		contentDescription = presentationLabel
+		if (announceLoading && state == CanopyFormInteractionState.SUBMITTING) {
+			announceCanopyLoading(presentationLabel)
+		}
+	}
 }
+
+@Suppress("DEPRECATION")
+private fun View.announceCanopyLoading(text: CharSequence) = announceForAccessibility(text)
+
+internal fun canopySubmitButtonLabel(
+	state: CanopyFormInteractionState,
+	submitLabel: String?,
+	loadingLabel: String,
+): String = if (state == CanopyFormInteractionState.SUBMITTING) loadingLabel else submitLabel.orEmpty()
 
 private fun View.setCanopyFormControlsEnabled(enabled: Boolean) {
 	if (isFocusable || isClickable) isEnabled = enabled

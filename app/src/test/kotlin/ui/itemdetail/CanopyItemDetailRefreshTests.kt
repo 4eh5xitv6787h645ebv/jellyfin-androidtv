@@ -54,6 +54,8 @@ class CanopyItemDetailRefreshTests : FunSpec({
 		retry.formEditable shouldBe false
 		retry.submitEnabled shouldBe true
 		retry.submitting() shouldBe CanopyFormInteractionState.SUBMITTING
+		canopySubmitButtonLabel(CanopyFormInteractionState.SUBMITTING, "Request", "Loading…") shouldBe "Loading…"
+		canopySubmitButtonLabel(CanopyFormInteractionState.RETRY, "Request", "Loading…") shouldBe "Request"
 	}
 
 	test("status-only row content is descriptive and explicitly non-interactive") {

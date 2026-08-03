@@ -25,6 +25,12 @@ private data class CanopySubmissionSnapshot(
 	val answers: List<CanopyAnswer>,
 )
 
+private data class CanopyResolvedSurfaceSnapshot(
+	val value: CanopyResolvedSurface,
+	val etag: String?,
+	val projected: CanopyItemDetailSurface,
+)
+
 internal data class CanopyActionLayout(
 	val direct: List<CanopyContribution.Action>,
 	val overflow: List<CanopyContribution.Action>,
@@ -45,6 +51,7 @@ internal data class CanopyActionLayout(
 internal sealed interface CanopyItemDetailEvent {
 	data class Surface(val value: CanopyItemDetailSurface?) : CanopyItemDetailEvent
 	data class Form(val value: CanopyPreparedForm) : CanopyItemDetailEvent
+	data object InvalidateForm : CanopyItemDetailEvent
 	data object Submitting : CanopyItemDetailEvent
 	data class InvalidForm(val fieldIds: Set<String>) : CanopyItemDetailEvent
 	data class Message(val text: String?, val tone: CanopyTone, val fallback: Fallback) : CanopyItemDetailEvent {
@@ -154,39 +161,78 @@ internal class CanopyItemDetailCoordinator(
 	private var surfaceJob: Job? = null
 	private var actionJob: Job? = null
 	private var itemId: UUID? = null
+	private var cachedSurface: CanopyItemDetailSurface? = null
+	private var resolvedSurfaceSnapshot: CanopyResolvedSurfaceSnapshot? = null
 	private var actions = emptyMap<String, CanopyContribution.Action>()
 	private var activeForm: CanopyPreparedForm? = null
 	private var submissionSnapshot: CanopySubmissionSnapshot? = null
 	private var submitting = false
+	private var refreshQueued = false
 
 	fun bind(newItemId: UUID, force: Boolean = false) {
-		if (!force && itemId == newItemId && surfaceJob?.isActive == true) return
-		val requestGeneration = reset(newItemId)
+		if (!force && itemId == newItemId && (cachedSurface != null || surfaceJob?.isActive == true)) {
+			// Recycler/Fragment reattachment is not an authority invalidation. Re-emit the row
+			// without replacing the generation that owns a live native form.
+			cachedSurface?.let { onEvent(CanopyItemDetailEvent.Surface(it)) }
+			return
+		}
+		val preserveSurface = force && itemId == newItemId
+		val previousSnapshot = resolvedSurfaceSnapshot.takeIf { preserveSurface }
+		val requestGeneration = reset(newItemId, preserveSurface)
 		surfaceJob = scope.launch {
 			if (gateway.discover().successValue() == null) return@launch
 			if (!isCurrent(requestGeneration, newItemId)) return@launch
 			val negotiation = gateway.negotiate().successValue()
 			if (negotiation?.compatible != true || !isCurrent(requestGeneration, newItemId)) return@launch
-			val resolved = gateway.resolveItemDetail(newItemId).successValue() ?: return@launch
+			val resolvedResult = gateway.resolveItemDetail(newItemId) as? CanopyCallResult.Success ?: return@launch
+			val resolved = resolvedResult.value
 			if (!isCurrent(requestGeneration, newItemId)) return@launch
 
 			val availableActions = resolved.contributions.filterIsInstance<CanopyContribution.Action>()
 				.filter { it.enabled && it.prepareHandle != null }
 			actions = availableActions.associateBy { it.id }
-			onEvent(
-				CanopyItemDetailEvent.Surface(
-					CanopyItemDetailSurface(
-						itemId = newItemId,
-						actions = availableActions,
-						statuses = resolved.contributions.filterIsInstance<CanopyContribution.Status>(),
-					),
-				),
+			val surface = CanopyItemDetailSurface(
+				itemId = newItemId,
+				actions = availableActions,
+				statuses = resolved.contributions.filterIsInstance<CanopyContribution.Status>(),
 			)
+			val snapshot = CanopyResolvedSurfaceSnapshot(resolved, resolvedResult.etag, surface)
+			cachedSurface = surface
+			resolvedSurfaceSnapshot = snapshot
+			// Resolve is a POST and cannot use a conditional request. Suppress row churn only
+			// when both the complete mapped representation (including opaque handles and the
+			// catalog revision) and its response ETag are exactly unchanged. Regardless, the
+			// authoritative action map and snapshot above are always replaced.
+			val representationUnchanged = previousSnapshot?.let {
+				snapshot.value == it.value && snapshot.etag == it.etag
+			} == true
+			if (!representationUnchanged) {
+				onEvent(CanopyItemDetailEvent.Surface(snapshot.projected))
+			}
 		}
 	}
 
 	fun refreshSurface() {
 		itemId?.let { bind(it, force = true) }
+	}
+
+	/** Queue generic external invalidation while a form owns a prepared capability. */
+	fun requestSurfaceRefresh() {
+		if (activeForm != null || submitting) {
+			refreshQueued = true
+			return
+		}
+		refreshSurface()
+	}
+
+	/** Release only the exact form dismissed by the native dialog. */
+	fun dismissForm(prepared: CanopyPreparedForm) {
+		if (activeForm !== prepared) return
+		activeForm = null
+		if (!submitting) {
+			submissionSnapshot = null
+			drainQueuedSurfaceRefresh()
+		}
 	}
 
 	fun prepare(actionId: String) {
@@ -231,6 +277,7 @@ internal class CanopyItemDetailCoordinator(
 			activeForm = null
 			submissionSnapshot = null
 			onEvent(expiredMessage())
+			drainQueuedSurfaceRefresh()
 			return
 		}
 		val answers = answersForSubmission(prepared, form) ?: return
@@ -250,15 +297,22 @@ internal class CanopyItemDetailCoordinator(
 							fallback = CanopyItemDetailEvent.Message.Fallback.ACTION_SUCCEEDED,
 						),
 					)
+					val responseRefreshesSurface = CanopyRefreshTarget.ITEM_DETAIL_SURFACE in result.value.refreshTargets
+					if (responseRefreshesSurface) refreshQueued = false
 					if (result.value.refreshTargets.isNotEmpty()) {
 						onEvent(CanopyItemDetailEvent.Refresh(checkNotNull(itemId), result.value.refreshTargets))
 					}
+					if (!responseRefreshesSurface) drainQueuedSurfaceRefresh()
 				}
 				else -> if (requestGeneration == generation) {
 					onEvent(unavailableMessage(result.serverMessage()))
 				}
 			}
-			if (requestGeneration == generation) submitting = false
+			if (requestGeneration == generation) {
+				submitting = false
+				if (activeForm == null) submissionSnapshot = null
+				drainQueuedSurfaceRefresh()
+			}
 		}
 	}
 
@@ -277,17 +331,31 @@ internal class CanopyItemDetailCoordinator(
 		return form.answers().also { submissionSnapshot = CanopySubmissionSnapshot(prepared, it) }
 	}
 
-	private fun reset(newItemId: UUID?): Long {
+	private fun reset(newItemId: UUID?, preserveSurface: Boolean = false): Long {
 		generation++
 		surfaceJob?.cancel()
 		actionJob?.cancel()
 		itemId = newItemId
-		actions = emptyMap()
+		if (!preserveSurface) {
+			cachedSurface = null
+			resolvedSurfaceSnapshot = null
+			actions = emptyMap()
+		}
 		activeForm = null
 		submissionSnapshot = null
 		submitting = false
-		onEvent(CanopyItemDetailEvent.Surface(null))
+		refreshQueued = false
+		if (!preserveSurface) {
+			onEvent(CanopyItemDetailEvent.InvalidateForm)
+			onEvent(CanopyItemDetailEvent.Surface(null))
+		}
 		return generation
+	}
+
+	private fun drainQueuedSurfaceRefresh() {
+		if (!refreshQueued || activeForm != null || submitting) return
+		refreshQueued = false
+		refreshSurface()
 	}
 
 	private fun isCurrent(requestGeneration: Long, requestItemId: UUID) =
