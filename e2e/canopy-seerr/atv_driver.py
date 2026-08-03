@@ -238,8 +238,14 @@ class Device:
 				continue
 			blocks.append('FATAL EXCEPTION' + block[:3000])
 		main = self.adb('logcat', '-d').stdout
-		for m in re.finditer(r'ACRA caught a (\w+) for ' + re.escape(self.package) + r'\b', main):
-			blocks.append('ACRA: ' + m.group(1))
+		lines = main.splitlines()
+		pattern = re.compile(r'ACRA caught an? (\w+) for ' + re.escape(self.package) + r'\b')
+		for index, line in enumerate(lines):
+			match = pattern.search(line)
+			if not match:
+				continue
+			detail = [l.split(': ', 1)[-1] for l in lines[index:index + 14]]
+			blocks.append('ACRA: %s\n%s' % (match.group(1), '\n'.join(detail[1:])))
 		return blocks
 
 	def requests(self, needle):

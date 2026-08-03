@@ -127,6 +127,37 @@ class MainActivity : FragmentActivity() {
 	private fun onKeyEvent(keyCode: Int, event: KeyEvent?): Boolean = supportFragmentManager.fragments
 		.any { it.onKeyEvent(keyCode, event) }
 
+	/**
+	 * Contains a focus-traversal crash that originates below this app.
+	 *
+	 * Screens here host leanback rows inside Compose (`AndroidFragment`), and
+	 * Compose's embedded-view focus search calls
+	 * `FocusFinder.findNextFocus(root, focused, …)`. When rows repopulate
+	 * asynchronously — search results arriving, a Canopy surface resolving —
+	 * the view holding focus can be detached while still registered as the
+	 * window's focus. The framework then walks a view that is not a descendant
+	 * of the root it is searching and throws, killing the process on a key
+	 * press the user did nothing wrong to make.
+	 *
+	 * Rows are already mutated as conservatively as possible (diffed, never
+	 * rebuilt wholesale) and screens claim focus once their content lands, but
+	 * neither closes the window completely: the throw happens inside framework
+	 * code we do not drive. Swallowing *this* traversal failure and dropping
+	 * focus back to a valid view turns a crash into a single ignored key
+	 * press. The exception is matched narrowly and always logged — a
+	 * traversal failure from any other cause must still surface.
+	 */
+	override fun dispatchKeyEvent(event: KeyEvent): Boolean = try {
+		super.dispatchKeyEvent(event)
+	} catch (error: IllegalArgumentException) {
+		if (error.message?.contains(DETACHED_FOCUS_MESSAGE) != true) throw error
+
+		Timber.w(error, "Focus traversal hit a detached view; resetting focus")
+		currentFocus?.clearFocus()
+		window?.decorView?.requestFocus()
+		true
+	}
+
 	override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean =
 		onKeyEvent(keyCode, event) || super.onKeyDown(keyCode, event)
 
@@ -135,4 +166,9 @@ class MainActivity : FragmentActivity() {
 
 	override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean =
 		onKeyEvent(keyCode, event) || super.onKeyUp(keyCode, event)
+
+	private companion object {
+		/** Thrown by ViewGroup.offsetRectBetweenParentAndChild during focus search. */
+		private const val DETACHED_FOCUS_MESSAGE = "must be a descendant"
+	}
 }
