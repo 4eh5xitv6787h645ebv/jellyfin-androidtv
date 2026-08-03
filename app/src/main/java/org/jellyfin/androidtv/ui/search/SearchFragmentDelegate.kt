@@ -1,6 +1,7 @@
 package org.jellyfin.androidtv.ui.search
 
 import android.content.Context
+import androidx.leanback.widget.ArrayObjectAdapter
 import androidx.leanback.widget.HeaderItem
 import androidx.leanback.widget.ListRow
 import androidx.leanback.widget.OnItemViewClickedListener
@@ -18,7 +19,6 @@ import org.jellyfin.androidtv.ui.presentation.CardPresenter
 import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter
 import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter
 import org.jellyfin.androidtv.ui.seerr.navigateToSeerrEntry
-import org.jellyfin.androidtv.ui.seerr.seerrListRow
 
 internal class SearchFragmentDelegate(
 	private val context: Context,
@@ -28,12 +28,15 @@ internal class SearchFragmentDelegate(
 ) {
 	val rowsAdapter = MutableObjectAdapter<Row>(CustomListRowPresenter())
 
-	private var seerrRow: ListRow? = null
+	// The Seerr row and its adapter are deliberately persistent: rebuilding the
+	// row while one of its cards holds focus detaches the focused view and the
+	// next d-pad event crashes FocusFinder (#4). Items are updated in place.
+	private val seerrAdapter = ArrayObjectAdapter(SeerrCardPresenter())
+	private val seerrRow = ListRow(HeaderItem(context.getString(R.string.canopy_seerr_search_row)), seerrAdapter)
 	private var seerrEntries: List<SeerrEntry> = emptyList()
 
 	fun showResults(searchResultGroups: Collection<SearchResultGroup>) {
 		rowsAdapter.clear()
-		seerrRow = null
 		val adapters = mutableListOf<ItemRowAdapter>()
 		for ((labelRes, baseItems) in searchResultGroups) {
 			val adapter = ItemRowAdapter(
@@ -57,18 +60,19 @@ internal class SearchFragmentDelegate(
 	}
 
 	/**
-	 * Keeps the Seerr row as the last row of the adapter. The library rows
-	 * above it are rebuilt independently by [showResults].
+	 * Keeps the Seerr row as the last row of the adapter, updating the
+	 * persistent adapter's items in place. The library rows above it are
+	 * rebuilt independently by [showResults].
 	 */
 	private fun updateSeerrRow() {
-		seerrRow?.let { rowsAdapter.remove(it) }
-		seerrRow = null
+		if (seerrEntries.isEmpty()) {
+			rowsAdapter.remove(seerrRow)
+			seerrAdapter.clear()
+			return
+		}
 
-		if (seerrEntries.isEmpty()) return
-
-		val row = seerrListRow(context.getString(R.string.canopy_seerr_search_row), seerrEntries)
-		seerrRow = row
-		rowsAdapter.add(row)
+		seerrAdapter.setItems(seerrEntries, null)
+		if (rowsAdapter.indexOf(seerrRow) < 0) rowsAdapter.add(seerrRow)
 	}
 
 	val onItemViewClickedListener = OnItemViewClickedListener { _, item, _, row ->
