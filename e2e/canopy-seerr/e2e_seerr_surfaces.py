@@ -233,6 +233,49 @@ def main():
 			save_evidence('10-native-person-more-from')
 	step('native person screen shows Seerr More from row', more_from)
 
+	# 9b. Long-pressing a library-backed Seerr card opens Canopy actions
+	fresh(d)
+	d.tap_text('Search')
+	time.sleep(5)
+	d.type_text('iron')
+	d.key(atv.KEY_ENTER, delay=3)
+	time.sleep(14)
+	long_press_ok = False
+	if d.dpad_until(lambda _t: d._focused_row_header() == 'Discover · Seerr', atv.KEY_DOWN, 20):
+		# find a card already in the library (its subtitle says so)
+		if d.focus_row_and_pick('Discover · Seerr', lambda t: any('In library' in x for x in t), max_cols=25):
+			d.shell('input', 'keyevent', '--longpress', str(atv.KEY_CENTER))
+			time.sleep(5)
+			long_press_ok = d.has_text('Spoiler Guard', 'Hidden Content', 'Actions')
+			save_evidence('12-card-long-press-actions')
+			d.key(atv.KEY_BACK)
+	step('long-press on library-backed Seerr card opens Canopy actions', long_press_ok)
+
+	# 9c. Person screen splits credits into Movies and Series rows
+	fresh(d)
+	split_ok = False
+	d.tap_text('Search')
+	time.sleep(5)
+	d.type_text('iron')
+	d.key(atv.KEY_ENTER, delay=3)
+	time.sleep(14)
+	if d.dpad_until(lambda t: any('Iron' in x for x in t), atv.KEY_DOWN, 10):
+		d.key(atv.KEY_CENTER)
+		time.sleep(10)
+		if d.dpad_until(lambda _t: (d._focused_row_header() or '').startswith('Cast'), atv.KEY_DOWN, 12):
+			d.key(atv.KEY_CENTER)
+			time.sleep(12)
+			headers = set()
+			for _ in range(12):
+				h = d._focused_row_header()
+				if h:
+					headers.add(h)
+				d.key(atv.KEY_DOWN)
+			more_from = [h for h in headers if h.startswith('More from')]
+			split_ok = any('Movies' in h for h in more_from) or any('Series' in h for h in more_from)
+			save_evidence('13-person-split-rows')
+	step('person filmography rows are split by kind', split_ok)
+
 	# 10. Canopy settings: action placement selector renders all options
 	fresh(d)
 	placement_ok = False

@@ -14,10 +14,26 @@ on the item details screen, with server-defined forms shown as native dialogs.
 Nothing feature-specific is hardcoded; new server contributions appear without
 client changes as long as they stay within the negotiated schema.
 
+Actions render as **native detail buttons** next to Play/Watched by default.
+Settings → Canopy → *Action placement* switches between three modes:
+
+| Mode | Behavior |
+|---|---|
+| With the item buttons (default) | `TextUnderButton`s inserted before *Other options*, styled like Play/Request |
+| In the Other options menu | entries appended to the existing overflow popup |
+| Dedicated Actions row | the original leanback row below the details, including status text |
+
+The same actions are reachable **without** the details screen: long-pressing a
+Seerr card whose title is already in the library opens a chooser
+(`ui/canopy/CanopyQuickActions.kt`), and the Seerr item screen shows a
+*Manage* button for library-backed titles. Form rendering is shared through
+`ui/itemdetail/CanopyFormPresenter.kt` so every entry point renders identical
+dialogs.
+
 - Renderer/controller: `ui/itemdetail/CanopyItemDetailController.kt`
 - Protocol client and hardening: `integration/canopy/` (allowlisted routes,
   bounded responses, strict wire validation)
-- User toggle: Settings → Canopy → *Item detail actions*
+- User toggles: Settings → Canopy → *Item detail actions*, *Action placement*
 
 ## 2. Seerr discovery (proxy surface)
 
@@ -39,9 +55,15 @@ Surfaces (`integration/canopy/seerr/` + `ui/seerr/` + `ui/search/`):
   overview, request status; *Request* / *Request in 4K* actions with a season
   picker for series (offered only when the Seerr server allows partial
   requests) and remaining-quota display; Cast, *Part of <collection>*,
-  Similar, Recommended and *More from <studio/network>* rows. Items already in
-  the library open the regular Jellyfin details screen instead.
-- **Person screen**: biography plus movie/series credit rows.
+  Similar, Recommended and *More from <studio/network>* rows, the latter split
+  into separate Movies and Series rows. Follow-up rows are ordered most
+  popular first. Items already in the library open the regular Jellyfin
+  details screen instead.
+- **Person screen**: biography plus movie/series credit rows. The **native**
+  Jellyfin person screen also gains *More from <name> · Movies/Series* rows so
+  an actor's full filmography is browsable even when the library holds only a
+  few of their titles (`ui/seerr/SeerrPersonExtras.kt`, resolving the person
+  by TMDB provider id or by name search).
 - User toggle: Settings → Canopy → *Seerr search suggestions* (governs the
   search row, the Discover button and all Seerr screens' entry points).
 
@@ -56,6 +78,8 @@ Surfaces (`integration/canopy/seerr/` + `ui/seerr/` + `ui/search/`):
 
 ## Known sharp edges
 
+- Request submission understands Canopy's structured outcome envelope when
+  the server sends one, and falls back to status-code semantics otherwise.
 - The SDK's raw `ApiClient.request()` executes on the calling dispatcher —
   always wrap calls in `Dispatchers.IO` (a release build on hardware turns
   this mistake into `NetworkOnMainThreadException`; debug builds tolerate it).
