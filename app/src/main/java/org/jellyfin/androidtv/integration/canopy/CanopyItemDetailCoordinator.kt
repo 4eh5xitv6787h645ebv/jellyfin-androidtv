@@ -180,13 +180,32 @@ internal class CanopyItemDetailCoordinator(
 		val previousSnapshot = resolvedSurfaceSnapshot.takeIf { preserveSurface }
 		val requestGeneration = reset(newItemId, preserveSurface)
 		surfaceJob = scope.launch {
-			if (gateway.discover().successValue() == null) return@launch
+			val discovery = gateway.discover()
 			if (!isCurrent(requestGeneration, newItemId)) return@launch
-			val negotiation = gateway.negotiate().successValue()
-			if (negotiation?.compatible != true || !isCurrent(requestGeneration, newItemId)) return@launch
-			val resolvedResult = gateway.resolveItemDetail(newItemId) as? CanopyCallResult.Success ?: return@launch
+			if (discovery.requiresAuthorityRevocation()) {
+				revokeSurface()
+				return@launch
+			}
+			if (discovery !is CanopyCallResult.Success) return@launch
+
+			val negotiation = gateway.negotiate()
+			if (!isCurrent(requestGeneration, newItemId)) return@launch
+			if (negotiation.requiresAuthorityRevocation() ||
+				negotiation is CanopyCallResult.Success && !negotiation.value.compatible
+			) {
+				revokeSurface()
+				return@launch
+			}
+			if (negotiation !is CanopyCallResult.Success) return@launch
+
+			val resolvedResult = gateway.resolveItemDetail(newItemId)
+			if (!isCurrent(requestGeneration, newItemId)) return@launch
+			if (resolvedResult.requiresAuthorityRevocation()) {
+				revokeSurface()
+				return@launch
+			}
+			if (resolvedResult !is CanopyCallResult.Success) return@launch
 			val resolved = resolvedResult.value
-			if (!isCurrent(requestGeneration, newItemId)) return@launch
 
 			val availableActions = resolved.contributions.filterIsInstance<CanopyContribution.Action>()
 				.filter { it.enabled && it.prepareHandle != null }
@@ -358,6 +377,22 @@ internal class CanopyItemDetailCoordinator(
 		refreshSurface()
 	}
 
+	/** Explicit authority loss or an unsafe representation revokes previously usable opaque handles. */
+	private fun revokeSurface() {
+		val hadCachedAuthority = cachedSurface != null || resolvedSurfaceSnapshot != null || actions.isNotEmpty()
+		cachedSurface = null
+		resolvedSurfaceSnapshot = null
+		actions = emptyMap()
+		activeForm = null
+		submissionSnapshot = null
+		submitting = false
+		refreshQueued = false
+		if (hadCachedAuthority) {
+			onEvent(CanopyItemDetailEvent.InvalidateForm)
+			onEvent(CanopyItemDetailEvent.Surface(null))
+		}
+	}
+
 	private fun isCurrent(requestGeneration: Long, requestItemId: UUID) =
 		requestGeneration == generation && requestItemId == itemId
 
@@ -373,6 +408,27 @@ internal class CanopyItemDetailCoordinator(
 		fallback = CanopyItemDetailEvent.Message.Fallback.ACTION_EXPIRED,
 	)
 
-	private fun <T> CanopyCallResult<T>.successValue(): T? = (this as? CanopyCallResult.Success)?.value
+	private fun CanopyCallResult<*>.requiresAuthorityRevocation(): Boolean = when (this) {
+		CanopyCallResult.Absent, CanopyCallResult.Unauthorized, CanopyCallResult.Forbidden -> true
+		is CanopyCallResult.Failure -> when (kind) {
+			CanopyFailureKind.UNSUPPORTED_CONTRACT,
+			CanopyFailureKind.INVALID_RESPONSE,
+			CanopyFailureKind.BUFFERED_RESPONSE_TOO_LARGE,
+			-> true
+			CanopyFailureKind.HTTP -> status.isAuthoritativeClientFailure()
+			CanopyFailureKind.TRANSPORT -> false
+		}
+		is CanopyCallResult.Success -> false
+	}
 	private fun CanopyCallResult<*>.serverMessage(): String? = (this as? CanopyCallResult.Failure)?.error?.message
 }
+
+private fun Int?.isAuthoritativeClientFailure() = when (this) {
+	null, HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS -> false
+	else -> this in HTTP_CLIENT_ERROR_MINIMUM..HTTP_CLIENT_ERROR_MAXIMUM
+}
+
+private const val HTTP_CLIENT_ERROR_MINIMUM = 400
+private const val HTTP_CLIENT_ERROR_MAXIMUM = 499
+private const val HTTP_REQUEST_TIMEOUT = 408
+private const val HTTP_TOO_MANY_REQUESTS = 429

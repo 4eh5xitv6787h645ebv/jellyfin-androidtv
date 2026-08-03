@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.isActive
@@ -33,6 +34,9 @@ internal class CanopyItemDetailInvalidation(
 ) {
 	@OptIn(FlowPreview::class)
 	fun signals(): Flow<Unit> = merge(
+		// repeatOnLifecycle creates a fresh collection on every RESUMED transition.
+		// Revalidate immediately so events missed while stopped cannot leave a stale row.
+		flowOf(Unit),
 		socketApi.subscribe<UserDataChangedMessage>().map { Unit },
 		socketApi.subscribe<LibraryChangedMessage>().map { Unit },
 		socketApi.subscribeGeneralCommand(GeneralCommandType.SET_PLAYBACK_ORDER)

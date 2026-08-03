@@ -129,6 +129,103 @@ class CanopyItemDetailCoordinatorTests : FunSpec({
 		events.filterIsInstance<CanopyItemDetailEvent.Surface>().count { it.value == null } shouldBe 1
 	}
 
+	test("explicit authority rejection on refresh revokes the row and every old action handle") {
+		val explicitRejections: List<(FakeGateway) -> Unit> = listOf(
+			{ it.discovery = CanopyCallResult.Absent },
+			{ it.discovery = CanopyCallResult.Unauthorized },
+			{ it.discovery = CanopyCallResult.Forbidden },
+			{ it.negotiation = CanopyCallResult.Absent },
+			{ it.negotiation = CanopyCallResult.Unauthorized },
+			{ it.negotiation = CanopyCallResult.Forbidden },
+			{ it.negotiation = CanopyCallResult.Success(CanopyNegotiation(false, null, 1, 1)) },
+			{ it.resolve = { CanopyCallResult.Absent } },
+			{ it.resolve = { CanopyCallResult.Unauthorized } },
+			{ it.resolve = { CanopyCallResult.Forbidden } },
+			{
+				it.resolve = {
+					CanopyCallResult.Failure(
+						kind = CanopyFailureKind.HTTP,
+						status = 404,
+						error = platformError("not_found"),
+					)
+				}
+			},
+			{ it.discovery = CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE) },
+			{ it.negotiation = CanopyCallResult.Failure(CanopyFailureKind.UNSUPPORTED_CONTRACT) },
+			{ it.resolve = { CanopyCallResult.Failure(CanopyFailureKind.BUFFERED_RESPONSE_TOO_LARGE) } },
+		)
+
+		explicitRejections.forEach { reject ->
+			val gateway = FakeGateway()
+			val events = mutableListOf<CanopyItemDetailEvent>()
+			val coordinator = coordinator(gateway, events)
+			coordinator.bind(ITEM_ONE)
+
+			reject(gateway)
+			coordinator.requestSurfaceRefresh()
+			coordinator.prepare("usable")
+
+			events.takeLast(2) shouldContainExactly listOf(
+				CanopyItemDetailEvent.InvalidateForm,
+				CanopyItemDetailEvent.Surface(null),
+			)
+			gateway.preparedHandles shouldBe emptyList()
+		}
+	}
+
+	test("explicit rejection stays queued until the owned form is dismissed then revokes it") {
+		val gateway = FakeGateway()
+		val events = mutableListOf<CanopyItemDetailEvent>()
+		val coordinator = coordinator(gateway, events)
+		coordinator.bind(ITEM_ONE)
+		coordinator.prepare("usable")
+		val prepared = events.filterIsInstance<CanopyItemDetailEvent.Form>().single().value
+		gateway.discovery = CanopyCallResult.Absent
+
+		coordinator.requestSurfaceRefresh()
+		events.last() shouldBe CanopyItemDetailEvent.Form(prepared)
+		coordinator.dismissForm(prepared)
+		coordinator.prepare("usable")
+		coordinator.submit(prepared, prepared.form.setChecked("confirm", true))
+
+		events.takeLast(2) shouldContainExactly listOf(
+			CanopyItemDetailEvent.InvalidateForm,
+			CanopyItemDetailEvent.Surface(null),
+		)
+		gateway.preparedHandles shouldContainExactly listOf("handle-usable")
+		gateway.calls.count { it == "invoke" } shouldBe 0
+	}
+
+	test("transient transport and server refresh failures preserve the last bounded authority") {
+		val transientFailures: List<(FakeGateway) -> Unit> = listOf(
+			{ it.discovery = CanopyCallResult.Failure(CanopyFailureKind.TRANSPORT) },
+			{
+				it.resolve = {
+					CanopyCallResult.Failure(
+						kind = CanopyFailureKind.HTTP,
+						status = 503,
+						error = platformError("unavailable"),
+					)
+				}
+			},
+		)
+
+		transientFailures.forEach { fail ->
+			val gateway = FakeGateway()
+			val events = mutableListOf<CanopyItemDetailEvent>()
+			val coordinator = coordinator(gateway, events)
+			coordinator.bind(ITEM_ONE)
+			fail(gateway)
+
+			coordinator.requestSurfaceRefresh()
+			coordinator.prepare("usable")
+
+			events.filterIsInstance<CanopyItemDetailEvent.Surface>().map { it.value }.count { it == null } shouldBe 1
+			events.filterIsInstance<CanopyItemDetailEvent.InvalidateForm>().size shouldBe 1
+			gateway.preparedHandles shouldContainExactly listOf("handle-usable")
+		}
+	}
+
 	test("refresh suppresses only an exactly unchanged resolve representation and ETag") {
 		val etagOne = "\"sha256-${"a".repeat(64)}\""
 		val etagTwo = "\"sha256-${"b".repeat(64)}\""
@@ -483,6 +580,13 @@ private fun usableAction(id: String, label: String, prepareHandle: String = "han
 	icon = CanopySemanticIcon.DEFAULT,
 	enabled = true,
 	prepareHandle = CanopyPrepareHandle(prepareHandle),
+)
+
+private fun platformError(code: String) = CanopyPlatformError(
+	code = code,
+	message = "Platform request failed.",
+	retryable = code == "unavailable",
+	correlationId = "0123456789abcdef0123456789abcdef",
 )
 
 private fun preparedAction(expiresAt: Instant = NOW.plusSeconds(60)) = CanopyPreparedAction(

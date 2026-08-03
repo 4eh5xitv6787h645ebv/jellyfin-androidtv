@@ -4,17 +4,19 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.util.UUID
 import kotlin.reflect.KClass
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.yield
 import org.jellyfin.sdk.api.sockets.SocketApi
 import org.jellyfin.sdk.api.sockets.SocketApiState
 import org.jellyfin.sdk.model.api.GeneralCommand
@@ -42,19 +44,38 @@ class CanopyItemDetailInvalidationTests : FunSpec({
 		CanopyItemDetailInvalidation.PERIODIC_REFRESH_MILLIS shouldBe 120_000L
 	}
 
+	test("each fresh resumed-style collection immediately revalidates") {
+		runBlocking {
+			val socket = FakeSocketApi()
+			val signals = CanopyItemDetailInvalidation(socket, periodicRefreshMillis = 10_000L, coalesceMillis = 5L)
+				.signals()
+
+			repeat(2) {
+				withTimeout(1_000L) { signals.take(1).toList() }.size shouldBe 1
+			}
+		}
+	}
+
 	test("a burst of exact config invalidations is coalesced") {
 		runBlocking {
 			val socket = FakeSocketApi()
-			val result = async {
-				CanopyItemDetailInvalidation(socket, periodicRefreshMillis = 10_000L, coalesceMillis = 20L)
-					.signals()
-					.take(1)
-					.toList()
-			}
-			yield()
+			val emissions = mutableListOf<Unit>()
+			val initial = CompletableDeferred<Unit>()
+			val afterBurst = CompletableDeferred<Unit>()
+			val collection = CanopyItemDetailInvalidation(socket, periodicRefreshMillis = 10_000L, coalesceMillis = 20L)
+				.signals()
+				.onEach {
+					emissions += Unit
+					initial.complete(Unit)
+					if (emissions.size == 2) afterBurst.complete(Unit)
+				}
+				.launchIn(this)
+			withTimeout(1_000L) { initial.await() }
 			repeat(3) { socket.messages.emit(configMessage()) }
+			withTimeout(1_000L) { afterBurst.await() }
 
-			withTimeout(1_000L) { result.await() }.size shouldBe 1
+			emissions.size shouldBe 2
+			collection.cancel()
 		}
 	}
 
@@ -64,11 +85,11 @@ class CanopyItemDetailInvalidationTests : FunSpec({
 			val result = async {
 				CanopyItemDetailInvalidation(socket, periodicRefreshMillis = 20L, coalesceMillis = 5L)
 					.signals()
-					.take(1)
+					.take(2)
 					.toList()
 			}
 
-			withTimeout(1_000L) { result.await() }.size shouldBe 1
+			withTimeout(1_000L) { result.await() }.size shouldBe 2
 		}
 	}
 })
