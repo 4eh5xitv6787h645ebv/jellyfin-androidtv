@@ -64,9 +64,15 @@ internal object CanopyContractMapper {
 		requireText(wire.cancelLabel, CanopyContractBounds.MAX_LABEL_BYTES, "Cancel label")
 		requireContract(wire.fields.size <= CanopyContractBounds.MAX_FIELDS, "Too many action fields")
 
-		requireContract(CANONICAL_UTC_INSTANT.matches(wire.expiresAtUtc), "Capability expiry was not canonical UTC")
+		requireContract(
+			CANONICAL_UTC_INSTANT.matches(wire.expiresAtUtc),
+			"Capability expiry was not canonical UTC",
+		)
 		val expiresAt = try {
-			Instant.parse(wire.expiresAtUtc)
+			// Android's desugared java.time rejects fractional seconds combined with
+			// the contract-valid +00:00 spelling. The regex above has already proved
+			// the offset is exactly UTC, so normalize only that spelling before parsing.
+			Instant.parse(normalizeValidatedCanonicalUtcInstant(wire.expiresAtUtc))
 		} catch (_: RuntimeException) {
 			throw CanopyContractException(message = "Capability expiry was not canonical UTC")
 		}
@@ -303,4 +309,11 @@ internal object CanopyContractMapper {
 	private val CANONICAL_UTC_INSTANT = Regex(
 		"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,7})?(?:Z|\\+00:00)$",
 	)
+}
+
+/** Requires the caller to validate [value] with [CANONICAL_UTC_INSTANT] first. */
+internal fun normalizeValidatedCanonicalUtcInstant(value: String) = if (value.endsWith("+00:00")) {
+	value.dropLast("+00:00".length) + "Z"
+} else {
+	value
 }

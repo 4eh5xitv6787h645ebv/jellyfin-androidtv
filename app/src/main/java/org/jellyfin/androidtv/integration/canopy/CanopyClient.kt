@@ -11,6 +11,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpMethod
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
+import timber.log.Timber
 
 internal enum class CanopyBodyReadMode {
 	/** Jellyfin SDK 1.8.x materialized the complete body before Canopy could inspect its size. */
@@ -277,13 +278,18 @@ internal class CanopyClient internal constructor(
 			val wire = json.decodeFromString<W>(responseText)
 			CanopyCallResult.Success(mapper(wire), response.etag())
 		} catch (error: CanopyContractException) {
+			// Never attach the exception: serialization/contract exception messages can
+			// include attacker-controlled response fragments or opaque capabilities.
+			Timber.w("Canopy response violated the supported contract")
 			CanopyCallResult.Failure(
 				kind = if (error.unsupported) CanopyFailureKind.UNSUPPORTED_CONTRACT else CanopyFailureKind.INVALID_RESPONSE,
 				status = response.status,
 			)
 		} catch (_: SerializationException) {
+			Timber.w("Canopy response could not be decoded")
 			invalidResponse(response.status)
 		} catch (_: IllegalArgumentException) {
+			Timber.w("Canopy response was invalid")
 			invalidResponse(response.status)
 		}
 	}

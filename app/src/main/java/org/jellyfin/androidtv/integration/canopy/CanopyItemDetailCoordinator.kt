@@ -5,6 +5,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 internal data class CanopyItemDetailSurface(
 	val itemId: UUID,
@@ -215,6 +216,9 @@ internal class CanopyItemDetailCoordinator(
 					onEvent(CanopyItemDetailEvent.Form(prepared))
 				}
 				else -> if (requestGeneration == generation) {
+					if (result is CanopyCallResult.Failure) {
+						Timber.w("Canopy action prepare failed (%s, HTTP %s)", result.kind, result.status)
+					}
 					onEvent(unavailableMessage(result.serverMessage()))
 				}
 			}

@@ -253,11 +253,19 @@ class CanopyClientTests : FunSpec({
 			"2026-08-02T16:30:00Z",
 			"2026-08-02T16:30:00.1234567Z",
 			"2026-08-02T16:30:00+00:00",
+			"2026-08-02T16:30:00.1234567+00:00",
 		).forEach { expiry ->
 			val body = fixture("prepare.all-field-kinds.200.json").replace(original, expiry)
 			val result = CanopyClient(FixtureTransport(response(200, body))).prepare(prepareHandle())
 			result::class shouldBe CanopyCallResult.Success::class
 		}
+	}
+
+	test("fractional UTC offset expiry is normalized for Android's desugared parser") {
+		normalizeValidatedCanonicalUtcInstant("2026-08-02T16:30:00.1234567+00:00") shouldBe
+			"2026-08-02T16:30:00.1234567Z"
+		normalizeValidatedCanonicalUtcInstant("2026-08-02T16:30:00.1234567Z") shouldBe
+			"2026-08-02T16:30:00.1234567Z"
 	}
 
 	test("prepare rejects noncanonical expiry forms") {
