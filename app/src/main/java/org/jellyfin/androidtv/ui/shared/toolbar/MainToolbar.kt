@@ -156,7 +156,7 @@ private fun MainToolbar(
 					val seerrEnabled by observePreference(userPreferences, UserPreferences.canopySeerrSearchEnabled)
 					val seerrAvailable by seerrRepository.availability.collectAsState()
 					LaunchedEffect(seerrEnabled) {
-						if (seerrEnabled) seerrRepository.capabilities()
+						if (seerrEnabled) seerrRepository.resolveAvailability()
 					}
 					if (seerrEnabled && seerrAvailable == true) {
 						Button(

@@ -12,6 +12,12 @@ internal data class CanopyNegotiation(
 	val protocol: Int?,
 	val hostProtocolMinimum: Int,
 	val hostProtocolMaximum: Int,
+	/**
+	 * Whether the host has Seerr configured and linked for the acting user.
+	 * Null on hosts predating the field; callers must resolve availability
+	 * themselves rather than assuming either answer.
+	 */
+	val seerrAvailable: Boolean? = null,
 )
 
 internal data class CanopyResolvedSurface(

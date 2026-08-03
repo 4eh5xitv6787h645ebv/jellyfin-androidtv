@@ -16,6 +16,9 @@ internal data class CanopyNegotiationWire(
 	@SerialName("Protocol") val protocol: Int? = null,
 	@SerialName("HostProtocolMinimum") val hostProtocolMinimum: Int,
 	@SerialName("HostProtocolMaximum") val hostProtocolMaximum: Int,
+	// Added by the host after protocol v1 shipped; absent on older servers,
+	// which is why it is nullable rather than defaulted to false.
+	@SerialName("SeerrAvailable") val seerrAvailable: Boolean? = null,
 )
 
 @Serializable
