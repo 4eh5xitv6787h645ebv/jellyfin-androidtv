@@ -58,36 +58,35 @@ internal class ApiClientCanopyTransport(
 			?.takeIf { it.maximumResponseBytes == maximumResponseBytes }
 			?: throw IllegalArgumentException(UNREVIEWED_ROUTE_MESSAGE)
 		val requestUrl = apiClient.createUrl(path, emptyMap(), query).toHttpUrl()
-		val registration = requestRegistry.register(method, requestUrl, route)
-		return try {
-			val response = apiClient.request(method, path, emptyMap(), query, body)
-			CanopyHttpResponse(
-				status = response.status,
-				body = response.body,
-				headers = response.headers,
-				bodyReadMode = if (response.wasBoundedDuringRead()) {
-					CanopyBodyReadMode.BOUNDED_DURING_READ
-				} else {
-					CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK
-				},
-			)
-		} catch (error: InvalidStatusException) {
-			CanopyHttpResponse(
-				status = error.status,
-				body = byteArrayOf(),
-				headers = emptyMap(),
-				bodyReadMode = CanopyBodyReadMode.SDK_STATUS_ONLY,
-			)
-		} catch (error: ApiClientException) {
-			val bounded = error.exactCanopyBoundedResponseOrNull() ?: throw error
-			CanopyHttpResponse(
-				status = bounded.status,
-				body = bounded.body,
-				headers = bounded.headers,
-				bodyReadMode = CanopyBodyReadMode.BOUNDED_DURING_READ,
-			)
-		} finally {
-			registration.close()
+		return requestRegistry.withRegistration(method, requestUrl, route) {
+			try {
+				val response = apiClient.request(method, path, emptyMap(), query, body)
+				CanopyHttpResponse(
+					status = response.status,
+					body = response.body,
+					headers = response.headers,
+					bodyReadMode = if (response.wasBoundedDuringRead()) {
+						CanopyBodyReadMode.BOUNDED_DURING_READ
+					} else {
+						CanopyBodyReadMode.SDK_BUFFERED_BEFORE_LIMIT_CHECK
+					},
+				)
+			} catch (error: InvalidStatusException) {
+				CanopyHttpResponse(
+					status = error.status,
+					body = byteArrayOf(),
+					headers = emptyMap(),
+					bodyReadMode = CanopyBodyReadMode.SDK_STATUS_ONLY,
+				)
+			} catch (error: ApiClientException) {
+				val bounded = error.exactCanopyBoundedResponseOrNull() ?: throw error
+				CanopyHttpResponse(
+					status = bounded.status,
+					body = bounded.body,
+					headers = bounded.headers,
+					bodyReadMode = CanopyBodyReadMode.BOUNDED_DURING_READ,
+				)
+			}
 		}
 	}
 

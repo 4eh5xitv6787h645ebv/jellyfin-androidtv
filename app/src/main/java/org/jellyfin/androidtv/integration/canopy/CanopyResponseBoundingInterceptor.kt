@@ -2,10 +2,16 @@ package org.jellyfin.androidtv.integration.canopy
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets
-import java.util.ArrayDeque
+import java.util.Collections
+import java.util.IdentityHashMap
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jellyfin.sdk.api.client.HttpMethod
@@ -21,12 +27,17 @@ internal class CanopyResponseBoundingInterceptor(
 ) : Interceptor {
 	override fun intercept(chain: Interceptor.Chain): Response {
 		val request = chain.request()
-		val route = requestRegistry.claim(request.method, request.url)
-			?: if (CanopyPlatformRoutes.hasReviewedTerminal(request.method, request.url.encodedPath)) {
+		val route = when (val claim = requestRegistry.claim(chain.call(), request)) {
+			is CanopyRequestRegistry.Claim.Bound -> claim.route
+			CanopyRequestRegistry.Claim.Rejected -> throw CanopyUnregisteredRequestException()
+			CanopyRequestRegistry.Claim.Unregistered -> if (
+				CanopyPlatformRoutes.hasReviewedTerminal(request.method, request.url.encodedPath)
+			) {
 				throw CanopyUnregisteredRequestException()
 			} else {
 				return chain.proceed(request)
 			}
+		}
 		val response = chain.proceed(request)
 		val boundedHeaders = response.boundedProtocolHeaders()
 		val originalBody = response.body
@@ -96,49 +107,90 @@ internal class CanopyUnregisteredRequestException : IOException(MESSAGE) {
  * Carries exact request provenance from [ApiClientCanopyTransport] to the shared
  * OkHttp interceptor without adding a wire-visible marker or another HTTP stack.
  *
- * Registrations use the fully canonical SDK URL, including its configured base
- * path and query. This makes literal-percent and other valid base paths safe while
- * unrelated terminal-path lookalikes remain outside the interceptor. Identical
- * concurrent requests each own one queued registration.
+ * A coroutine-scoped registration is bound synchronously to the exact OkHttp
+ * [Call] identity when the SDK invokes OkHttpClient.newCall(). The interceptor
+ * claims only that identity and rechecks the fully canonical URL and method. An
+ * identical unregistered request therefore cannot steal a response bound, and no
+ * marker is placed in a URL, header, body or log.
  */
 internal class CanopyRequestRegistry {
-	private data class RequestKey(val method: String, val url: HttpUrl)
+	internal sealed interface Claim {
+		data class Bound(val route: CanopyPlatformRoute) : Claim
+		data object Rejected : Claim
+		data object Unregistered : Claim
+	}
+
+	private class Registration(
+		val method: String,
+		val url: HttpUrl,
+		val route: CanopyPlatformRoute,
+	) {
+		var closed = false
+		var callCreated = false
+		val calls: MutableSet<Call> = Collections.newSetFromMap(IdentityHashMap())
+	}
+
+	private data class Binding(val registration: Registration, val accepted: Boolean)
 
 	private val monitor = Any()
-	private val pending = mutableMapOf<RequestKey, ArrayDeque<Registration>>()
+	private val currentRegistration = ThreadLocal<Registration?>()
+	private val bindings = IdentityHashMap<Call, Binding>()
 
-	fun register(method: HttpMethod, url: HttpUrl, route: CanopyPlatformRoute): Registration = synchronized(monitor) {
+	suspend fun <T> withRegistration(
+		method: HttpMethod,
+		url: HttpUrl,
+		route: CanopyPlatformRoute,
+		block: suspend () -> T,
+	): T {
+		check(currentRegistration.get() == null) { "Nested Canopy request registration" }
 		val registration = Registration(method.name, url, route)
-		pending.getOrPut(RequestKey(method.name, url), ::ArrayDeque).addLast(registration)
-		registration
+		return try {
+			withContext(currentRegistration.asContextElement(registration)) { block() }
+		} finally {
+			close(registration)
+		}
 	}
 
-	fun claim(method: String, url: HttpUrl): CanopyPlatformRoute? = synchronized(monitor) {
-		val key = RequestKey(method, url)
-		val queue = pending[key] ?: return@synchronized null
-		val registration = queue.pollFirst() ?: return@synchronized null
-		registration.closedOrClaimed = true
-		if (queue.isEmpty()) pending.remove(key)
-		registration.route
+	fun eventListenerFactory(
+		delegate: EventListener.Factory = EventListener.Factory { EventListener.NONE },
+	): EventListener.Factory = EventListener.Factory { call ->
+		bindCurrentRegistration(call)
+		delegate.create(call)
 	}
 
-	private fun cancel(registration: Registration) = synchronized(monitor) {
-		if (registration.closedOrClaimed) return@synchronized
-		registration.closedOrClaimed = true
-		val key = RequestKey(registration.method, registration.url)
-		val queue = pending[key] ?: return@synchronized
-		queue.remove(registration)
-		if (queue.isEmpty()) pending.remove(key)
+	fun claim(call: Call, request: Request): Claim = synchronized(monitor) {
+		val binding = bindings.remove(call) ?: return@synchronized Claim.Unregistered
+		binding.registration.calls.remove(call)
+		if (
+			!binding.accepted ||
+			binding.registration.closed ||
+			request.method != binding.registration.method ||
+			request.url != binding.registration.url
+		) {
+			Claim.Rejected
+		} else {
+			Claim.Bound(binding.registration.route)
+		}
 	}
 
-	internal inner class Registration(
-		internal val method: String,
-		internal val url: HttpUrl,
-		internal val route: CanopyPlatformRoute,
-	) : AutoCloseable {
-		internal var closedOrClaimed = false
+	private fun bindCurrentRegistration(call: Call) {
+		val registration = currentRegistration.get() ?: return
+		val request = call.request()
+		synchronized(monitor) {
+			val accepted = !registration.closed &&
+				!registration.callCreated &&
+				request.method == registration.method &&
+				request.url == registration.url
+			registration.callCreated = true
+			bindings[call] = Binding(registration, accepted)
+			registration.calls.add(call)
+		}
+	}
 
-		override fun close() = cancel(this)
+	private fun close(registration: Registration) = synchronized(monitor) {
+		registration.closed = true
+		registration.calls.forEach(bindings::remove)
+		registration.calls.clear()
 	}
 
 	companion object {

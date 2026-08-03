@@ -8,6 +8,14 @@ import io.kotest.matchers.shouldBe
 import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.Headers
 import okhttp3.Headers.Companion.toHeaders
 import okhttp3.Interceptor
@@ -64,6 +72,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 				)
 			}
 			val base = OkHttpClient.Builder()
+				.eventListenerFactory(requestRegistry.eventListenerFactory())
 				.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 				.addInterceptor(responseProvider)
 				.build()
@@ -134,47 +143,174 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 		val upstream = response(request, 200, "bounded")
 		val requestRegistry = CanopyRequestRegistry()
 		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+		val registeredClient = bindingClient(requestRegistry)
 
 		shouldThrow<CanopyUnregisteredRequestException> {
 			interceptor.intercept(chain(request, upstream))
 		}
-		requestRegistry.register(route.method, request.url, route).close()
+		requestRegistry.withRegistration(route.method, request.url, route) { }
 		shouldThrow<CanopyUnregisteredRequestException> {
 			interceptor.intercept(chain(request, upstream))
 		}
 
-		val registration = requestRegistry.register(route.method, request.url, route)
-		val bounded = interceptor.intercept(chain(request, upstream))
+		val bounded = requestRegistry.withRegistration(route.method, request.url, route) {
+			val call = registeredClient.newCall(request)
+			interceptor.intercept(chain(request, upstream, call))
+		}
 		bounded.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
 			CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
-		registration.close()
 
 		shouldThrow<CanopyUnregisteredRequestException> {
 			interceptor.intercept(chain(request, upstream))
 		}
 	}
 
-	test("identical concurrent requests consume one exact registration each") {
+	test("an unregistered identical call cannot steal an exact live Call binding") {
 		val route = CanopyPlatformRoutes.negotiate
 		val request = request(route.method.name, "${route.encodedPath}?protocolMinimum=1&protocolMaximum=1")
 		val requestRegistry = CanopyRequestRegistry()
-		val first = requestRegistry.register(route.method, request.url, route)
-		val second = requestRegistry.register(route.method, request.url, route)
 		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+		val registeredClient = bindingClient(requestRegistry)
 
-		repeat(2) {
-			val upstream = response(request, 200, "bounded-$it")
-			interceptor.intercept(chain(request, upstream))
+		requestRegistry.withRegistration(route.method, request.url, route) {
+			val registeredCall = registeredClient.newCall(request)
+			shouldThrow<CanopyUnregisteredRequestException> {
+				interceptor.intercept(chain(request, response(request, 200, "steal")))
+			}
+			interceptor.intercept(chain(request, response(request, 200, "bounded"), registeredCall))
 				.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
 				CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
 		}
-		first.close()
-		second.close()
+	}
 
-		val unregistered = response(request, 200, "ordinary")
-		shouldThrow<CanopyUnregisteredRequestException> {
-			interceptor.intercept(chain(request, unregistered))
+	test("one registration cannot authorize a second SDK Call") {
+		val route = CanopyPlatformRoutes.discovery
+		val request = request(route.method.name, route.encodedPath)
+		val requestRegistry = CanopyRequestRegistry()
+		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+		val registeredClient = bindingClient(requestRegistry)
+
+		requestRegistry.withRegistration(route.method, request.url, route) {
+			val first = registeredClient.newCall(request)
+			val second = registeredClient.newCall(request)
+			interceptor.intercept(chain(request, response(request, 200, "first"), first))
+				.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
+				CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
+			shouldThrow<CanopyUnregisteredRequestException> {
+				interceptor.intercept(chain(request, response(request, 200, "second"), second))
+			}
 		}
+	}
+
+	test("two identical concurrent registrations bind distinct Calls while a third is rejected") {
+		val route = CanopyPlatformRoutes.negotiate
+		val request = request(route.method.name, route.encodedPath)
+		val requestRegistry = CanopyRequestRegistry()
+		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+		val registeredClient = bindingClient(requestRegistry)
+
+		coroutineScope {
+			val release = CompletableDeferred<Unit>()
+			val ready = List(2) { CompletableDeferred<Call>() }
+			val jobs = ready.map { signal ->
+				async {
+					requestRegistry.withRegistration(route.method, request.url, route) {
+						signal.complete(registeredClient.newCall(request))
+						release.await()
+					}
+				}
+			}
+			val calls = ready.map { it.await() }
+			try {
+				calls.forEachIndexed { index, call ->
+					interceptor.intercept(chain(request, response(request, 200, "bounded-$index"), call))
+						.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
+						CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
+				}
+				shouldThrow<CanopyUnregisteredRequestException> {
+					interceptor.intercept(chain(request, response(request, 200, "extra")))
+				}
+			} finally {
+				release.complete(Unit)
+				jobs.awaitAll()
+			}
+		}
+	}
+
+	test("cancellation and request drift remove or reject only the exact Call binding") {
+		val route = CanopyPlatformRoutes.discovery
+		val request = request(route.method.name, route.encodedPath)
+		val requestRegistry = CanopyRequestRegistry()
+		val interceptor = CanopyResponseBoundingInterceptor(requestRegistry)
+		val registeredClient = bindingClient(requestRegistry)
+
+		coroutineScope {
+			val cancelledReady = CompletableDeferred<Call>()
+			val survivingReady = CompletableDeferred<Call>()
+			val release = CompletableDeferred<Unit>()
+			val cancelled = async {
+				requestRegistry.withRegistration(route.method, request.url, route) {
+					cancelledReady.complete(registeredClient.newCall(request))
+					release.await()
+				}
+			}
+			val surviving = async {
+				requestRegistry.withRegistration(route.method, request.url, route) {
+					survivingReady.complete(registeredClient.newCall(request))
+					release.await()
+				}
+			}
+			val cancelledCall = cancelledReady.await()
+			val survivingCall = survivingReady.await()
+			try {
+				cancelled.cancelAndJoin()
+				shouldThrow<CanopyUnregisteredRequestException> {
+					interceptor.intercept(chain(request, response(request, 200, "cancelled"), cancelledCall))
+				}
+				shouldThrow<CanopyUnregisteredRequestException> {
+					interceptor.intercept(chain(request, response(request, 200, "shift-steal")))
+				}
+				interceptor.intercept(chain(request, response(request, 200, "surviving"), survivingCall))
+					.header(CanopyResponseBoundingInterceptor.BOUNDED_HEADER) shouldBe
+					CanopyResponseBoundingInterceptor.BOUNDED_HEADER_VALUE
+			} finally {
+				release.complete(Unit)
+				surviving.await()
+			}
+		}
+
+		requestRegistry.withRegistration(route.method, request.url, route) {
+			val wrong = request.newBuilder().url(request.url.newBuilder().addPathSegment("wrong").build()).build()
+			val mismatchedCall = registeredClient.newCall(wrong)
+			shouldThrow<CanopyUnregisteredRequestException> {
+				interceptor.intercept(chain(wrong, response(wrong, 200, "wrong"), mismatchedCall))
+			}
+		}
+
+		requestRegistry.withRegistration(route.method, request.url, route) {
+			val boundCall = registeredClient.newCall(request)
+			val mutated = request.newBuilder().url(request.url.newBuilder().addPathSegment("mutated").build()).build()
+			shouldThrow<CanopyUnregisteredRequestException> {
+				interceptor.intercept(chain(mutated, response(mutated, 200, "mutated"), boundCall))
+			}
+		}
+	}
+
+	test("the Call binding preserves an existing EventListener factory") {
+		val route = CanopyPlatformRoutes.discovery
+		val request = request(route.method.name, route.encodedPath)
+		val requestRegistry = CanopyRequestRegistry()
+		val delegated = AtomicInteger()
+		val delegate = EventListener.Factory {
+			delegated.incrementAndGet()
+			EventListener.NONE
+		}
+		val client = OkHttpClient.Builder()
+			.eventListenerFactory(requestRegistry.eventListenerFactory(delegate))
+			.build()
+
+		requestRegistry.withRegistration(route.method, request.url, route) { client.newCall(request) }
+		delegated.get() shouldBe 1
 	}
 
 	test("the transport refuses unreviewed paths and mismatched response bounds before SDK dispatch") {
@@ -246,6 +382,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			)
 		}
 		val base = OkHttpClient.Builder()
+			.eventListenerFactory(requestRegistry.eventListenerFactory())
 			.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 			.addInterceptor(responseProvider)
 			.build()
@@ -330,6 +467,7 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			)
 		}
 		val base = OkHttpClient.Builder()
+			.eventListenerFactory(requestRegistry.eventListenerFactory())
 			.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 			.addInterceptor(responseProvider)
 			.build()
@@ -407,21 +545,31 @@ private fun response(
 	.body(body.toResponseBody(headers["Content-Type"]?.toMediaType()))
 	.build()
 
-private fun chain(request: Request, response: Response) = mockk<Interceptor.Chain>().also { chain ->
+private val unregisteredClient = OkHttpClient()
+
+private fun bindingClient(requestRegistry: CanopyRequestRegistry) = OkHttpClient.Builder()
+	.eventListenerFactory(requestRegistry.eventListenerFactory())
+	.build()
+
+private fun chain(
+	request: Request,
+	response: Response,
+	call: Call = unregisteredClient.newCall(request),
+) = mockk<Interceptor.Chain>().also { chain ->
 	every { chain.request() } returns request
-	every { chain.proceed(request) } returns response
+	every { chain.call() } returns call
+	every { chain.proceed(any()) } returns response
 }
 
-private fun interceptRegistered(
+private suspend fun interceptRegistered(
 	route: CanopyPlatformRoute,
 	request: Request,
 	response: Response,
 ): Response {
 	val requestRegistry = CanopyRequestRegistry()
-	val registration = requestRegistry.register(route.method, request.url, route)
-	return try {
-		CanopyResponseBoundingInterceptor(requestRegistry).intercept(chain(request, response))
-	} finally {
-		registration.close()
+	val client = bindingClient(requestRegistry)
+	return requestRegistry.withRegistration(route.method, request.url, route) {
+		val call = client.newCall(request)
+		CanopyResponseBoundingInterceptor(requestRegistry).intercept(chain(request, response, call))
 	}
 }

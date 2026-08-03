@@ -27,8 +27,9 @@ import org.jellyfin.androidtv.data.repository.NotificationsRepositoryImpl
 import org.jellyfin.androidtv.data.repository.UserViewsRepository
 import org.jellyfin.androidtv.data.repository.UserViewsRepositoryImpl
 import org.jellyfin.androidtv.data.service.BackgroundService
-import org.jellyfin.androidtv.integration.dream.DreamViewModel
+import org.jellyfin.androidtv.integration.canopy.CanopyRequestRegistry
 import org.jellyfin.androidtv.integration.canopy.CanopyResponseBoundingInterceptor
+import org.jellyfin.androidtv.integration.dream.DreamViewModel
 import org.jellyfin.androidtv.ui.InteractionTrackerViewModel
 import org.jellyfin.androidtv.ui.itemhandling.ItemLauncher
 import org.jellyfin.androidtv.ui.navigation.Destinations
@@ -84,9 +85,11 @@ val appModule = module {
 	// Keep one SDK-owned network/authentication stack. The exact-path interceptor
 	// bounds only Platform v1 response bodies before SDK 1.8.12 buffers them.
 	single {
+		val requestRegistry = CanopyRequestRegistry.shared
 		OkHttpFactory(
 			OkHttpClient.Builder()
-				.addInterceptor(CanopyResponseBoundingInterceptor())
+				.eventListenerFactory(requestRegistry.eventListenerFactory())
+				.addInterceptor(CanopyResponseBoundingInterceptor(requestRegistry))
 				.build(),
 		)
 	}
