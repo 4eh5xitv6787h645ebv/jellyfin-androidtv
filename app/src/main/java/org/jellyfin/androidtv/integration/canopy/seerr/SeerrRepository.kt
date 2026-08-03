@@ -440,11 +440,23 @@ internal class SeerrRepository(
 			year = (if (type == SeerrMediaType.MOVIE) releaseDate else firstAirDate)
 				?.take(YEAR_LENGTH)?.toIntOrNull(),
 			posterUrl = posterPath?.toTmdbImageUrl(TMDB_POSTER_BASE),
-			status = SeerrMediaStatus.fromWire(mediaInfo?.status),
-			status4k = SeerrMediaStatus.fromWire(mediaInfo?.status4k),
+			status = effectiveStatus(mediaInfo?.status, mediaInfo?.jellyfinMediaId),
+			status4k = effectiveStatus(mediaInfo?.status4k, mediaInfo?.jellyfinMediaId4k),
 			jellyfinMediaId = (mediaInfo?.jellyfinMediaId ?: mediaInfo?.jellyfinMediaId4k)?.toUUIDOrNull(),
 			popularity = popularity,
 		)
+	}
+
+	/**
+	 * Seerr can report a title as not-available while still linking it to a
+	 * Jellyfin item. The card would then show no status yet still open the
+	 * library screen when clicked - a label contradicting its own action. A
+	 * linked item is in the library whatever the status field says.
+	 */
+	private fun effectiveStatus(wire: Int?, jellyfinMediaId: String?): SeerrMediaStatus {
+		val reported = SeerrMediaStatus.fromWire(wire)
+		val linked = !jellyfinMediaId.isNullOrBlank()
+		return if (linked) SeerrMediaStatus.AVAILABLE else reported
 	}
 
 	private fun SeerrSearchResultDto.toPersonItem(): SeerrPersonItem? {

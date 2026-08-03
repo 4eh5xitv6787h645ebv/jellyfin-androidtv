@@ -365,6 +365,28 @@ class SeerrRepositoryTests : FunSpec({
 		absent.resolveAvailability() shouldBe true
 	}
 
+	test("a linked Jellyfin item reads as in-library whatever Seerr's status says") {
+		val repository = SeerrRepository(
+			apiWith(
+				"/JellyfinCanopy/seerr/search" to """
+					{"results": [
+						{"id": 1, "mediaType": "movie", "title": "Linked but unreported",
+						 "mediaInfo": {"status": 1, "jellyfinMediaId": "0b67e975-99cb-4bf3-96d3-b13ec50365ff"}},
+						{"id": 2, "mediaType": "movie", "title": "Not in library",
+						 "mediaInfo": {"status": 2}}
+					]}
+				""".trimIndent(),
+			),
+		)
+
+		val results = repository.search("x").filterIsInstance<SeerrDiscoverItem>()
+		// The card opens the library screen when linked, so it must say so.
+		results[0].status shouldBe SeerrMediaStatus.AVAILABLE
+		results[0].jellyfinMediaId.shouldNotBeNull()
+		// An unlinked item keeps whatever Seerr reported.
+		results[1].status shouldBe SeerrMediaStatus.PENDING
+	}
+
 	test("media status wire mapping") {
 		SeerrMediaStatus.fromWire(null) shouldBe SeerrMediaStatus.NOT_REQUESTED
 		SeerrMediaStatus.fromWire(1) shouldBe SeerrMediaStatus.NOT_REQUESTED
