@@ -83,9 +83,16 @@ def main():
 			time.sleep(4)
 			if d.has_text('Request seasons'):
 				save_evidence('04a-season-picker')
-				# season list defaults all-checked; move to the Request button and confirm
-				# AlertDialog renders its buttons in all caps
-				if d.dpad_until(lambda t: t and {x.upper() for x in t} <= {'REQUEST'}, atv.KEY_DOWN, 12):
+				# season list defaults all-checked; walk to the dialog button row
+				# (AlertDialog renders buttons in caps; DOWN lands on the left
+				# button, so step RIGHT until REQUEST has focus)
+				def on_button(t):
+					return bool(t) and {x.upper() for x in t} <= {'CANCEL', 'REQUEST'}
+				if d.dpad_until(on_button, atv.KEY_DOWN, 12):
+					d.dpad_until(
+						lambda t: bool(t) and {x.upper() for x in t} <= {'REQUEST'},
+						atv.KEY_RIGHT, 3,
+					)
 					d.key(atv.KEY_CENTER)
 			time.sleep(8)
 			after_posts = len(d.requests('seerr/request'))
