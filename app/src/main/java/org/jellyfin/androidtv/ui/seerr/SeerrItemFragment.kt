@@ -196,7 +196,7 @@ class SeerrItemFragment : Fragment() {
 			SeerrMediaType.MOVIE -> capabilities?.canRequest4kMovie == true
 			SeerrMediaType.TV -> capabilities?.canRequest4kTv == true
 		}
-		if (canRequest4k && details.item.status4k.requestable) {
+		if (canRequest4k && (details.item.status4k.requestable || hasRequestableSeasons(details, is4k = true))) {
 			row.addAction(
 				TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, getString(R.string.canopy_seerr_request_4k)) {
 					onRequestClicked(is4k = true)
@@ -314,8 +314,8 @@ class SeerrItemFragment : Fragment() {
 		imdb?.let { add(getString(R.string.canopy_seerr_rating_imdb, it)) }
 	}.joinToString(separator = " · ")
 
-	private fun hasRequestableSeasons(details: SeerrItemDetails): Boolean =
-		details.item.mediaType == SeerrMediaType.TV && details.seasons.any { it.status.requestable }
+	private fun hasRequestableSeasons(details: SeerrItemDetails, is4k: Boolean = false): Boolean =
+		details.item.mediaType == SeerrMediaType.TV && details.seasons.any { it.statusFor(is4k).requestable }
 
 	private fun onRequestClicked(is4k: Boolean) {
 		val details = details ?: return
@@ -335,11 +335,11 @@ class SeerrItemFragment : Fragment() {
 	}
 
 	private fun showSeasonPicker(details: SeerrItemDetails, is4k: Boolean) {
-		val requestable = details.seasons.filter { it.status.requestable }
+		// Seasons carry separate standard and 4K states, so a 4K request offers
+		// exactly the seasons missing in 4K rather than everything.
+		val requestable = details.seasons.filter { it.statusFor(is4k).requestable }
 		if (requestable.isEmpty()) {
-			// 4K season state isn't tracked per season here; request everything.
-			if (is4k) submit { seerrRepository.submitRequest(details.item, true) }
-			else Toast.makeText(requireContext(), R.string.canopy_seerr_no_requestable_seasons, Toast.LENGTH_LONG).show()
+			Toast.makeText(requireContext(), R.string.canopy_seerr_no_requestable_seasons, Toast.LENGTH_LONG).show()
 			return
 		}
 

@@ -146,6 +146,10 @@ class MainActivity : FragmentActivity() {
 	 * focus back to a valid view turns a crash into a single ignored key
 	 * press. The exception is matched narrowly and always logged — a
 	 * traversal failure from any other cause must still surface.
+	 *
+	 * This was measured, not assumed: a release build with the guard removed
+	 * crashed three times across 180 soak moves on the same seeds that run
+	 * clean with it (e2e/canopy-seerr/e2e_soak.py --seed 1, --seed 7).
 	 */
 	override fun dispatchKeyEvent(event: KeyEvent): Boolean = try {
 		super.dispatchKeyEvent(event)

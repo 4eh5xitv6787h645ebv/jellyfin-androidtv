@@ -46,6 +46,7 @@ internal data class SeerrMediaInfoDto(
 internal data class SeerrMediaInfoSeasonDto(
 	val seasonNumber: Int? = null,
 	val status: Int? = null,
+	val status4k: Int? = null,
 )
 
 @Serializable
@@ -265,7 +266,10 @@ internal data class SeerrSeason(
 	val name: String,
 	val episodeCount: Int?,
 	val status: SeerrMediaStatus,
-)
+	val status4k: SeerrMediaStatus = SeerrMediaStatus.NOT_REQUESTED,
+) {
+	fun statusFor(is4k: Boolean) = if (is4k) status4k else status
+}
 
 /** A named reference used for collection / studio / network follow-up rows. */
 internal data class SeerrNamedRef(
