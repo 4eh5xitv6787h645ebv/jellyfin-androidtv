@@ -1,5 +1,7 @@
 package org.jellyfin.androidtv.integration.canopy.seerr
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -243,7 +245,9 @@ internal class SeerrRepository(
 	}
 
 	private suspend fun submit(path: String, body: Any): SeerrRequestOutcome = try {
-		apiClient.request(HttpMethod.POST, path, emptyMap(), emptyMap(), body)
+		withContext(Dispatchers.IO) {
+			apiClient.request(HttpMethod.POST, path, emptyMap(), emptyMap(), body)
+		}
 		SeerrRequestOutcome.Submitted
 	} catch (error: InvalidStatusException) {
 		Timber.d(error, "Seerr request rejected with status %d", error.status)
@@ -279,8 +283,12 @@ internal class SeerrRepository(
 		emptyList()
 	}
 
+	// The SDK's raw request() executes on the calling dispatcher, so hop to IO
+	// here; callers all run on the main dispatcher (lifecycle/viewModel scopes).
 	private suspend fun get(path: String, query: Map<String, Any> = emptyMap()): ByteArray =
-		apiClient.request(HttpMethod.GET, path, emptyMap(), query, null).body
+		withContext(Dispatchers.IO) {
+			apiClient.request(HttpMethod.GET, path, emptyMap(), query, null).body
+		}
 
 	private fun language(): String = Locale.getDefault().language.ifBlank { "en" }
 
