@@ -196,7 +196,17 @@ that, so bound it in the mapper: cap rows (20) and credits (50), validate TMDB
 image paths against `^/[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp)$` before building a
 URL, and ignore unknown enum values rather than failing the whole response.
 
-### T10 — Never log a server-controlled response fragment
+### T10 — Notice the host retiring a route
+
+Canopy emits `Deprecation` and `Sunset` headers on Platform routes it is
+retiring (EP-01.10). A client that ignores them keeps working right up to the
+sunset date and then fails with no warning.
+
+`CanopyClient` logs the notice once per route per process. It is deliberately
+a **developer** signal, not a user-facing one: a viewer cannot act on it, so it
+must never reach the UI or repeat per request.
+
+### T11 — Never log a server-controlled response fragment
 
 `SerializationException` messages embed the offending JSON. `Timber.DebugTree`
 is planted in release builds. Log the message, never the throwable, for any
