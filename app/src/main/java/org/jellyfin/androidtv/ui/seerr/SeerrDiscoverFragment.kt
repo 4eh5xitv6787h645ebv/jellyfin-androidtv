@@ -2,21 +2,28 @@ package org.jellyfin.androidtv.ui.seerr
 
 import android.os.Bundle
 import android.view.LayoutInflater
-import android.view.View
 import android.view.ViewGroup
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.fragment.app.Fragment
+import androidx.fragment.compose.AndroidFragment
+import androidx.fragment.compose.content
 import androidx.leanback.app.RowsSupportFragment
 import androidx.leanback.widget.OnItemViewClickedListener
 import androidx.leanback.widget.Row
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
-import org.jellyfin.androidtv.databinding.FragmentFullDetailsBinding
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaType
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter
 import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter
+import org.jellyfin.androidtv.ui.shared.toolbar.MainToolbar
+import org.jellyfin.androidtv.ui.shared.toolbar.MainToolbarActiveButton
 import org.jellyfin.androidtv.util.Utils
 import org.koin.android.ext.android.inject
 
@@ -30,29 +37,38 @@ class SeerrDiscoverFragment : Fragment() {
 	private val seerrRepository by inject<SeerrRepository>()
 	private val navigationRepository by inject<NavigationRepository>()
 
-	override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-		val binding = FragmentFullDetailsBinding.inflate(layoutInflater, container, false)
+	private val rowsAdapter by lazy {
+		MutableObjectAdapter<Row>(CustomListRowPresenter(Utils.convertDpToPixel(requireContext(), 10)))
+	}
+	private var loaded = false
 
-		val rowsFragment = RowsSupportFragment()
-		childFragmentManager.beginTransaction().replace(R.id.rowsFragment, rowsFragment).commit()
+	override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?) = content {
+		Column {
+			MainToolbar(MainToolbarActiveButton.Discover)
 
-		rowsFragment.onItemViewClickedListener = OnItemViewClickedListener { _, item, _, _ ->
-			navigationRepository.navigateToSeerrEntry(item)
+			AndroidFragment<RowsSupportFragment>(
+				modifier = Modifier
+					.padding(top = 5.dp)
+					.fillMaxSize(),
+				onUpdate = { fragment ->
+					fragment.adapter = rowsAdapter
+					fragment.onItemViewClickedListener = OnItemViewClickedListener { _, item, _, _ ->
+						navigationRepository.navigateToSeerrEntry(item)
+					}
+					loadRows()
+				}
+			)
 		}
-
-		val adapter = MutableObjectAdapter<Row>(CustomListRowPresenter(Utils.convertDpToPixel(requireContext(), 10)))
-		rowsFragment.adapter = adapter
-
-		loadRows(adapter)
-
-		return binding.root
 	}
 
-	private fun loadRows(adapter: MutableObjectAdapter<Row>) {
+	private fun loadRows() {
+		if (loaded) return
+		loaded = true
+
 		lifecycleScope.launch {
 			if (!seerrRepository.capabilities().available) {
 				if (isAdded) {
-					adapter.add(
+					rowsAdapter.add(
 						seerrStatusRow(
 							getString(R.string.canopy_seerr_discover),
 							getString(R.string.canopy_seerr_unavailable),
@@ -75,11 +91,11 @@ class SeerrDiscoverFragment : Fragment() {
 			for ((labelRes, load) in rows) {
 				val entries = load()
 				if (!isAdded) return@launch
-				if (entries.isNotEmpty()) adapter.add(seerrListRow(getString(labelRes), entries))
+				if (entries.isNotEmpty()) rowsAdapter.add(seerrListRow(getString(labelRes), entries))
 			}
 
-			if (isAdded && adapter.size() == 0) {
-				adapter.add(
+			if (isAdded && rowsAdapter.size() == 0) {
+				rowsAdapter.add(
 					seerrStatusRow(
 						getString(R.string.canopy_seerr_discover),
 						getString(R.string.canopy_seerr_unavailable),
