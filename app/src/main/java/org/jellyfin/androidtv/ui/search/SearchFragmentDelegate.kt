@@ -46,7 +46,6 @@ internal class SearchFragmentDelegate(
 		val adapters = mutableListOf<ItemRowAdapter>()
 		val rows = mutableListOf<Row>()
 		for ((labelRes, baseItems) in searchResultGroups) {
-			val row = ListRow(HeaderItem(context.getString(labelRes)), null)
 			val adapter = ItemRowAdapter(
 				context,
 				baseItems.toList(),
@@ -54,7 +53,9 @@ internal class SearchFragmentDelegate(
 				rowsAdapter,
 				QueryType.Search
 			)
-			val listRow = ListRow(row.headerItem, adapter)
+			// ListRow rejects a null adapter, so build the header separately
+			// rather than constructing a placeholder row to carry it.
+			val listRow = ListRow(HeaderItem(context.getString(labelRes)), adapter)
 			adapter.setRow(listRow)
 			adapters.add(adapter)
 			rows.add(listRow)
