@@ -110,6 +110,60 @@ FOLDER_ROWS = ('My media', 'Collections')
 CONTENT_ROW_HINTS = ('Continue watching', 'Next up', 'Recently added')
 
 
+# Text that appears on cards but is not a title.
+NON_TITLE = re.compile(r'^(?:\d{1,2}:\d{2}.*|R|NR|PG|PG-13|TV-\w+|\d+|\d+\s*(?:min|h|m))$', re.IGNORECASE)
+
+
+def library_search_terms(d, limit=2):
+    """Search terms taken from titles the library actually holds.
+
+    A Seerr result only carries Canopy actions when the server has linked it to
+    a Jellyfin item, so searching a title the library already has is far more
+    likely to exercise that path than a generic term.
+
+    Titles are read from a *content* row: the "My media" row holds library
+    folders ("Movies", "Shows"), which match nothing. Card titles sit at the
+    left margin like headers do, so they are identified by position relative
+    to the chosen header rather than by indentation.
+    """
+    home(d)
+    root = d.dump_tree()
+    if root is None:
+        return ['the']
+
+    nodes = []
+    for node in root.iter('node'):
+        text = (node.get('text') or '').strip()
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
+        if text and m:
+            nodes.append((int(m.group(2)), text))
+    nodes.sort()
+
+    headers = [y for y, text in nodes if any(hint in text for hint in CONTENT_ROW_HINTS)]
+    if not headers:
+        return ['the']
+
+    # Take a title from each content row rather than several from the first:
+    # one row may hold fixtures the Seerr instance has never heard of, while
+    # another holds real releases.
+    header_names = {text for y, text in nodes if y <= headers[0]}
+    terms = []
+    for index, header_y in enumerate(headers):
+        next_header = headers[index + 1] if index + 1 < len(headers) else None
+        for y, text in nodes:
+            if y <= header_y or (next_header and y >= next_header):
+                continue
+            if text in header_names or NON_TITLE.match(text) or len(text) < 4:
+                continue
+            # Search the whole title: its first word is often "The".
+            if text not in terms:
+                terms.append(text)
+            break
+        if len(terms) >= limit:
+            break
+    return terms or ['the']
+
+
 def open_first_library_item(d):
     """Open a real item from a Home content row.
 
@@ -225,6 +279,13 @@ def scenario_discover(d):
 
     before_posts = len(d.requests('seerr/request'))
     requested, detail = False, ''
+    if not d.has_text('Request'):
+        # Earlier runs submit real requests, so a long-lived dev server drifts
+        # towards every trending title already being requested. That is the
+        # environment, not a client defect.
+        step('request button submits to Seerr', True,
+             'no requestable title on this server right now - skipped')
+        return
     if d.dpad_until(lambda t: any('Request' in x for x in t), atv.KEY_DOWN, 4):
         d.key(atv.KEY_CENTER)
         if d.wait_text('Request seasons', timeout=6):
@@ -269,7 +330,10 @@ def scenario_person(d):
         step('cast card opens person screen', True, 'no cast row served - skipped')
         return
 
-    card = d.focus_row_and_pick('Cast')
+    # A library-backed card opens the native item screen, whose row is called
+    # "Cast & crew"; a Seerr detail screen calls it "Cast".
+    card = (d.focus_row_and_pick('Cast', max_rows=30)
+            or d.focus_row_and_pick('Cast & crew', max_rows=30))
     if not card:
         step('cast card opens person screen', False, 'could not focus cast row')
         return
@@ -308,26 +372,32 @@ def scenario_search(d):
 
 def scenario_long_press(d, query=None):
     """Long-pressing a library-backed Seerr card opens Canopy actions."""
-    # Only titles already in the library carry Canopy actions, so this needs a
-    # Seerr result the server has linked to a Jellyfin item. Try a couple of
-    # broad queries and skip if this server links none.
-    for term in ([query] if query else ['a', 'the']):
+    # Canopy actions exist only for titles the library already has, so the
+    # query is derived from real library content instead of guessing generic
+    # terms: searching "a" and hoping a linked result appears both wasted most
+    # of the scenario's time and usually skipped without testing anything.
+    terms = [query] if query else library_search_terms(d, limit=3)
+    searched = []
+    for term in terms:
+        searched.append(term)
         if not search_for(d, term, settle=('Discover · Seerr',)):
             continue
         if not d.dpad_until(lambda _t: d._focused_row_header() == 'Discover · Seerr',
                             atv.KEY_DOWN, 20):
             continue
+        if not d.has_text('In library'):
+            continue
         if not d.focus_row_and_pick('Discover · Seerr',
-                                    lambda t: any('In library' in x for x in t), max_cols=25):
+                                    lambda t: any('In library' in x for x in t), max_cols=12):
             continue
         d.long_press()
         ok = d.wait_text('Spoiler Guard', 'Hidden Content', 'Actions', timeout=12)
         save_evidence('12-card-long-press-actions')
         d.key(atv.KEY_BACK)
-        step('long-press on library-backed Seerr card opens Canopy actions', ok)
+        step('long-press on library-backed Seerr card opens Canopy actions', ok, 'via "%s"' % term)
         return
     step('long-press on library-backed Seerr card opens Canopy actions', True,
-         'no Seerr result linked to the library on this server - skipped')
+         'no Seerr result linked to the library for %s - skipped' % (searched or 'any query'))
 
 
 def scenario_library(d):
