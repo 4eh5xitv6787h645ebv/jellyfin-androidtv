@@ -115,7 +115,7 @@ class SeerrRepositoryTests : FunSpec({
 							{"seasonNumber": 2, "name": "Season 2", "episodeCount": 10}
 						],
 						"credits": {"cast": [{"id": 22970, "name": "Peter Dinklage", "character": "Tyrion", "profilePath": "/p.jpg"}]},
-						"mediaInfo": {"status": 4, "seasons": [{"seasonNumber": 1, "status": 5}]}
+						"mediaInfo": {"status": 4, "seasons": [{"seasonNumber": 1, "status": 5, "status4k": 1}]}
 					}
 				""".trimIndent(),
 			),
@@ -131,6 +131,10 @@ class SeerrRepositoryTests : FunSpec({
 		details.seasons.map { it.number } shouldContainExactly listOf(1, 2)
 		details.seasons[0].status shouldBe SeerrMediaStatus.AVAILABLE
 		details.seasons[1].status shouldBe SeerrMediaStatus.NOT_REQUESTED
+		// per-season 4K state is tracked separately from the standard state
+		details.seasons[0].status4k shouldBe SeerrMediaStatus.NOT_REQUESTED
+		details.seasons[0].statusFor(is4k = true).requestable shouldBe true
+		details.seasons[0].statusFor(is4k = false).requestable shouldBe false
 		details.cast.single().role shouldBe "Tyrion"
 	}
 

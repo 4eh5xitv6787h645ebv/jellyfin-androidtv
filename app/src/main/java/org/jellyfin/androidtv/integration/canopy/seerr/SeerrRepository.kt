@@ -467,7 +467,12 @@ internal class SeerrRepository(
 
 		val seasonStatuses = mediaInfo?.seasons.orEmpty()
 			.mapNotNull { season ->
-				season.seasonNumber?.let { it to SeerrMediaStatus.fromWire(season.status) }
+				season.seasonNumber?.let {
+					it to Pair(
+						SeerrMediaStatus.fromWire(season.status),
+						SeerrMediaStatus.fromWire(season.status4k),
+					)
+				}
 			}
 			.toMap()
 
@@ -491,11 +496,13 @@ internal class SeerrRepository(
 			seasons = seasons.mapNotNull { season ->
 				val number = season.seasonNumber ?: return@mapNotNull null
 				if (number < 1) return@mapNotNull null
+				val statuses = seasonStatuses[number]
 				SeerrSeason(
 					number = number,
 					name = season.name?.takeIf { it.isNotBlank() } ?: "Season $number",
 					episodeCount = season.episodeCount,
-					status = seasonStatuses[number] ?: SeerrMediaStatus.NOT_REQUESTED,
+					status = statuses?.first ?: SeerrMediaStatus.NOT_REQUESTED,
+					status4k = statuses?.second ?: SeerrMediaStatus.NOT_REQUESTED,
 				)
 			},
 			collection = collection?.toNamedRef(),

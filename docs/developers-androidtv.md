@@ -65,6 +65,24 @@ a default-on button on a server with no Canopy is a dead end.
 These are numbered so review comments can cite them. T-rules are TV-specific;
 they exist because each one has already broken this app at least once.
 
+### T0 — Memory growth in a soak is usually the bitmap cache
+
+Total PSS is not a leak signal on this app. Across a 90-move soak on a Shield,
+PSS grew from 101 MB to 324 MB — but the breakdown says it is cache, not a
+leak:
+
+| Pool | Start | End |
+|---|---:|---:|
+| Java heap | 27 MB | **23 MB** |
+| Native | 15 MB | 60 MB |
+| Graphics | 12 MB | 140 MB |
+
+Java heap *shrank*; the growth is entirely bitmaps in Graphics/Native, which is
+Coil filling its cache budget against a real library. PSS also drops
+mid-run when the cache trims. Always read the breakdown
+(`e2e_soak.py` prints it) before calling growth a leak — and treat a rising
+**Java heap** as the signal that matters.
+
 ### T1 — Never mutate a row that may hold focus
 
 Removing a `ListRow`, or rebinding a details row wholesale, detaches the
@@ -86,7 +104,19 @@ and targeted `addActionView`/`removeActionView` instead of a full rebind.
 **Corollary:** the crash also surfaces inside Compose's
 `AndroidComposeView.findNextViewInEmbeddedView` when the mutated rows live in
 an `AndroidFragment<RowsSupportFragment>` — which is every Compose-hosted
-screen in this app. The fix is the same; the stack just looks different.
+screen in this app.
+
+Conservative mutation narrows the window but **cannot close it**: the throw is
+inside framework code the app does not drive. `MainActivity.dispatchKeyEvent`
+therefore contains that one exception and resets focus. This is measured, not
+defensive habit — removing the guard reproduced the crash three times in 180
+soak moves on seeds that are otherwise clean.
+
+**Corollary 2:** `ListRow` rejects a null adapter. Building a placeholder row
+to carry a header throws `IllegalArgumentException: ObjectAdapter cannot be
+null` — an easy mistake to make while restructuring row updates, and one that
+looked exactly like the focus crash until the *message* was compared rather
+than the exception type.
 
 ### T2 — Claim focus after asynchronous content
 
