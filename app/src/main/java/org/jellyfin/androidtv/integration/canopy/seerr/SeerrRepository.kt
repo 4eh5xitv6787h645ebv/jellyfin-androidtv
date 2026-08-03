@@ -252,6 +252,13 @@ internal class SeerrRepository(
 		null
 	}
 
+	/** Resolves a Seerr/TMDB person id by name via search; exact-name matches
+	 * win, otherwise the first person result. */
+	suspend fun findPersonId(name: String): Long? {
+		val people = search(name).filterIsInstance<SeerrPersonItem>()
+		return (people.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: people.firstOrNull())?.personId
+	}
+
 	/** Person details, or null when unavailable. */
 	suspend fun person(personId: Long): SeerrPersonDetails? = try {
 		val dto = fetch<SeerrPersonDetailsDto>("/JellyfinCanopy/seerr/person/$personId", mapOf("language" to language()))

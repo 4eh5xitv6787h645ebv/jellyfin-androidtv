@@ -11,13 +11,16 @@ import org.jellyfin.androidtv.ui.base.Text
 import org.jellyfin.androidtv.ui.base.form.Checkbox
 import org.jellyfin.androidtv.ui.base.list.ListButton
 import org.jellyfin.androidtv.ui.base.list.ListSection
+import org.jellyfin.androidtv.ui.navigation.LocalRouter
 import org.jellyfin.androidtv.ui.navigation.focus.focusKey
+import org.jellyfin.androidtv.ui.settings.Routes
 import org.jellyfin.androidtv.ui.settings.compat.rememberPreference
 import org.jellyfin.androidtv.ui.settings.composable.SettingsColumn
 import org.koin.compose.koinInject
 
 @Composable
 fun SettingsCanopyScreen() {
+	val router = LocalRouter.current
 	val userPreferences = koinInject<UserPreferences>()
 
 	SettingsColumn {
@@ -38,6 +41,17 @@ fun SettingsCanopyScreen() {
 				captionContent = { Text(stringResource(R.string.canopy_pref_item_actions_description)) },
 				onClick = { itemActionsEnabled = !itemActionsEnabled },
 				modifier = Modifier.focusKey("canopy_item_actions_enabled")
+			)
+		}
+
+		item {
+			var placement by rememberPreference(userPreferences, UserPreferences.canopyActionsPlacement)
+
+			ListButton(
+				headingContent = { Text(stringResource(R.string.canopy_pref_actions_placement)) },
+				captionContent = { Text(stringResource(placement.nameRes)) },
+				onClick = { router.push(Routes.CANOPY_ACTIONS_PLACEMENT) },
+				modifier = Modifier.focusKey(Routes.CANOPY_ACTIONS_PLACEMENT)
 			)
 		}
 

@@ -99,6 +99,10 @@ fun FullDetailsFragment.showDetailsMenu(
 	if (goToSeriesButton?.isVisible == false) {
 		item(getString(R.string.lbl_goto_series)) { gotoSeries() }
 	}
+
+	for (action in canopyMenuActions) {
+		item(action.label) { action.run() }
+	}
 }.showIfNotEmpty()
 
 fun FullDetailsFragment.createFakeSeriesTimerBaseItemDto(timer: SeriesTimerInfoDto) = BaseItemDto(

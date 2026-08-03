@@ -83,6 +83,11 @@
     <string name="canopy_settings_description">Server integrations provided by the Jellyfin Canopy plugin</string>
     <string name="canopy_pref_item_actions">Item detail actions</string>
     <string name="canopy_pref_item_actions_description">Show Canopy actions such as Spoiler Guard, Hidden Content and Seerr requests on item details</string>
+    <string name="canopy_pref_actions_placement">Action placement</string>
+    <string name="canopy_pref_actions_placement_description">Where Spoiler Guard, Hidden Content and Seerr actions appear on item details</string>
+    <string name="canopy_placement_buttons">With the item buttons</string>
+    <string name="canopy_placement_other_options">In the Other options menu</string>
+    <string name="canopy_placement_row">Dedicated Actions row</string>
     <string name="canopy_pref_seerr_search">Seerr search suggestions</string>
     <string name="canopy_pref_seerr_search_description">Show content you can request through Seerr when searching</string>
     <string name="canopy_seerr_search_row">Discover · Seerr</string>

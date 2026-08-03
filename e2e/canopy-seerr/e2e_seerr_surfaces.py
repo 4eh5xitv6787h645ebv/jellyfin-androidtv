@@ -192,7 +192,8 @@ def main():
 	step('seerr toggle hides Discover surfaces', toggled and hidden, 'toggled=%s hidden=%s' % (toggled, hidden))
 	step('seerr toggle re-enable restores Discover', restored)
 
-	# 8. Library item detail still shows the Canopy Actions row
+	# 8. Library item detail shows Canopy actions (native buttons by default,
+	# or the classic Actions row when that placement is selected)
 	fresh(d)
 	d.tap_text('Search')
 	time.sleep(5)
@@ -200,12 +201,50 @@ def main():
 	d.key(atv.KEY_ENTER, delay=3)
 	time.sleep(12)
 	shown = False
+	opened_library_item = False
 	if d.dpad_until(lambda t: any('Iron' in x for x in t), atv.KEY_DOWN, 10):
 		d.key(atv.KEY_CENTER)
 		time.sleep(10)
-		shown = d.has_text('Actions')
+		opened_library_item = True
+		shown = d.has_text('Spoiler Guard', 'Hidden Content', 'Actions', 'Seerr')
 		save_evidence('09-library-item-canopy-actions')
-	step('library item shows Canopy Actions row', shown)
+	step('library item shows Canopy actions', shown)
+
+	# 9. Native person screen (from a library item's cast) gets a Seerr
+	# "More from" filmography row
+	more_from = False
+	if opened_library_item:
+		if d.dpad_until(lambda _t: (d._focused_row_header() or '').startswith('Cast'), atv.KEY_DOWN, 12):
+			d.key(atv.KEY_CENTER)
+			time.sleep(12)
+			more_from = d.has_text('More from')
+			save_evidence('10-native-person-more-from')
+	step('native person screen shows Seerr More from row', more_from)
+
+	# 10. Canopy settings: action placement selector renders all options
+	fresh(d)
+	placement_ok = False
+	root = d.dump_tree()
+	p2 = None
+	if root is not None:
+		import re as _re
+		for node in root.iter('node'):
+			if node.get('content-desc') == 'Preferences':
+				m = _re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
+				if m:
+					x1, y1, x2, y2 = map(int, m.groups())
+					p2 = ((x1 + x2) // 2, (y1 + y2) // 2)
+				break
+	if p2:
+		d.tap(*p2, delay=6)
+		if d.tap_text('Canopy'):
+			time.sleep(4)
+			if d.tap_text('Action placement'):
+				time.sleep(4)
+				placement_ok = d.has_text('With the item buttons') and d.has_text('Other options menu') and d.has_text('Dedicated Actions row')
+				save_evidence('11-placement-options')
+				d.key(atv.KEY_BACK); d.key(atv.KEY_BACK); d.key(atv.KEY_BACK); d.key(atv.KEY_BACK)
+	step('placement setting shows all options', placement_ok)
 
 	# Crash sweep across the whole run
 	crashes = d.crash_log()

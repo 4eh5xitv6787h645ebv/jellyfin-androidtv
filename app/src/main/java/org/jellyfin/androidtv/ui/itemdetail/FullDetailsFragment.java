@@ -67,6 +67,8 @@ import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter;
 import org.jellyfin.androidtv.ui.presentation.InfoCardPresenter;
 import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter;
 import org.jellyfin.androidtv.ui.presentation.MyDetailsOverviewRowPresenter;
+import org.jellyfin.androidtv.ui.seerr.SeerrClickBridge;
+import org.jellyfin.androidtv.ui.seerr.SeerrPersonExtrasKt;
 import org.jellyfin.androidtv.util.CoroutineUtils;
 import org.jellyfin.androidtv.util.DateTimeExtensionsKt;
 import org.jellyfin.androidtv.util.ImageHelper;
@@ -133,6 +135,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     private MyDetailsOverviewRow mDetailsOverviewRow;
     private CustomListRowPresenter mListRowPresenter;
     private CanopyItemDetailController mCanopyController;
+    private final List<TextUnderButton> mCanopyActionButtons = new ArrayList<>();
+    private List<CanopyMenuAction> mCanopyMenuActions = new ArrayList<>();
     private ListRow mCanopyActionRow;
 
     private Handler mLoopHandler = new Handler();
@@ -173,7 +177,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
         mDorPresenter = new MyDetailsOverviewRowPresenter(markdownRenderer.getValue());
         if (userPreferences.getValue().get(UserPreferences.Companion.getCanopyItemActionsEnabled())) {
-            mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue());
+            mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue(), userPreferences.getValue());
         }
 
         mItemId = Utils.uuidOrNull(getArguments().getString("ItemId"));
@@ -496,6 +500,54 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
         }
     }
 
+    /**
+     * Places Canopy actions as native detail buttons, inserted before the
+     * "Other options" button. The row is rebound in place so it is never
+     * detached while focused.
+     */
+    void setCanopyActionButtons(@NonNull List<TextUnderButton> buttons) {
+        if (mDetailsOverviewRow == null) return;
+        boolean changed = false;
+        for (TextUnderButton button : mCanopyActionButtons) {
+            changed |= mDetailsOverviewRow.removeAction(button);
+        }
+        mCanopyActionButtons.clear();
+        if (!buttons.isEmpty()) {
+            int index = moreButton != null ? mDetailsOverviewRow.indexOfAction(moreButton) : -1;
+            if (index < 0) index = mDetailsOverviewRow.getActions().size();
+            for (TextUnderButton button : buttons) {
+                mDetailsOverviewRow.addAction(index++, button);
+                mCanopyActionButtons.add(button);
+            }
+            changed = true;
+        }
+        if (changed && mDorPresenter.getViewHolder() != null) {
+            mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
+        }
+    }
+
+    /**
+     * Places Canopy actions inside the "Other options" popup menu, forcing the
+     * button visible when entries exist even if no native action collapsed.
+     */
+    void setCanopyMenuActions(@NonNull List<CanopyMenuAction> actions) {
+        boolean hadActions = !mCanopyMenuActions.isEmpty();
+        mCanopyMenuActions = actions;
+        if (moreButton == null || mDetailsOverviewRow == null) return;
+        if (!actions.isEmpty() && moreButton.getVisibility() != View.VISIBLE) {
+            moreButton.setVisibility(View.VISIBLE);
+            if (mDorPresenter.getViewHolder() != null) mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
+        } else if (actions.isEmpty() && hadActions && collapsedOptions == 0 && moreButton.getVisibility() == View.VISIBLE) {
+            moreButton.setVisibility(View.GONE);
+            if (mDorPresenter.getViewHolder() != null) mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
+        }
+    }
+
+    @NonNull
+    List<CanopyMenuAction> getCanopyMenuActions() {
+        return mCanopyMenuActions;
+    }
+
     void setCanopyActionRow(@Nullable ListRow row) {
         if (mRowsAdapter == null) return;
         if (mCanopyActionRow != null) mRowsAdapter.remove(mCanopyActionRow);
@@ -605,6 +657,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
                 ItemRowAdapter personEpisodesAdapter = new ItemRowAdapter(requireContext(), BrowsingUtils.createPersonItemsRequest(mBaseItem.getId(), BaseItemKind.EPISODE), 100, false, new CardPresenter(), adapter);
                 addItemRow(adapter, personEpisodesAdapter, 2, getString(R.string.lbl_episodes));
+
+                SeerrPersonExtrasKt.addSeerrPersonCreditsRow(this, adapter, mBaseItem);
 
                 break;
             case MUSIC_ARTIST:
@@ -1215,6 +1269,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
                                   RowPresenter.ViewHolder rowViewHolder, Row row) {
 
             if (mCanopyController != null && mCanopyController.handleClick(item)) return;
+            if (SeerrClickBridge.handle(navigationRepository.getValue(), item)) return;
             if (!(item instanceof BaseRowItem)) return;
             itemLauncher.getValue().launch((BaseRowItem) item, (ItemRowAdapter) ((ListRow) row).getAdapter(), requireContext());
         }

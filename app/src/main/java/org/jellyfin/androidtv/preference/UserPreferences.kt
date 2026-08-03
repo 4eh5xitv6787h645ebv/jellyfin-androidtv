@@ -5,6 +5,7 @@ import androidx.preference.PreferenceManager
 import org.jellyfin.androidtv.preference.UserPreferences.Companion.screensaverInAppEnabled
 import org.jellyfin.androidtv.preference.constant.AVCLevel
 import org.jellyfin.androidtv.preference.constant.AppTheme
+import org.jellyfin.androidtv.preference.constant.CanopyActionsPlacement
 import org.jellyfin.androidtv.preference.constant.AudioBehavior
 import org.jellyfin.androidtv.preference.constant.BackdropBehavior
 import org.jellyfin.androidtv.preference.constant.BufferLength
@@ -264,6 +265,11 @@ class UserPreferences(context: Context) : SharedPreferenceStore(
 		 * Show Canopy actions and statuses on the item details screen.
 		 */
 		var canopyItemActionsEnabled = booleanPreference("canopy_item_actions_enabled", true)
+
+		/**
+		 * Where Canopy actions appear on the item details screen.
+		 */
+		var canopyActionsPlacement = enumPreference("canopy_actions_placement", CanopyActionsPlacement.BUTTONS)
 
 		/**
 		 * Show Seerr request suggestions in search results.

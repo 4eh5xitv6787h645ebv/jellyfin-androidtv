@@ -37,8 +37,12 @@ import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailSurface
 import org.jellyfin.androidtv.integration.canopy.CanopyPreparedForm
 import org.jellyfin.androidtv.integration.canopy.CanopyRefreshTarget
 import org.jellyfin.androidtv.integration.canopy.CanopySemanticIcon
+import org.jellyfin.androidtv.preference.UserPreferences
+import org.jellyfin.androidtv.preference.constant.CanopyActionsPlacement
 import org.jellyfin.androidtv.ui.GridButton
+import org.jellyfin.androidtv.ui.TextUnderButton
 import org.jellyfin.androidtv.ui.presentation.GridButtonPresenter
+import org.jellyfin.androidtv.util.Utils
 import org.jellyfin.androidtv.util.dp
 import org.jellyfin.sdk.api.client.ApiClient
 import java.time.Instant
@@ -48,6 +52,7 @@ internal class CanopyItemDetailController(
 	private val fragment: FullDetailsFragment,
 	apiClient: ApiClient,
 	private val dataRefreshService: DataRefreshService,
+	private val userPreferences: UserPreferences? = null,
 ) {
 	private val coordinator = CanopyItemDetailCoordinator(
 		scope = fragment.lifecycleScope,
@@ -144,10 +149,35 @@ internal class CanopyItemDetailController(
 	}
 
 	private fun showSurface(value: CanopyItemDetailSurface?) {
+		val placement = userPreferences?.get(UserPreferences.canopyActionsPlacement) ?: CanopyActionsPlacement.ROW
+
 		if (value == null || (value.actions.isEmpty() && value.statuses.isEmpty())) {
 			overflowActions = emptyList()
 			fragment.setCanopyActionRow(null)
+			fragment.setCanopyActionButtons(emptyList())
+			fragment.setCanopyMenuActions(emptyList())
 			return
+		}
+
+		when (placement) {
+			CanopyActionsPlacement.BUTTONS -> {
+				fragment.setCanopyActionRow(null)
+				fragment.setCanopyMenuActions(emptyList())
+				showInlineButtons(value)
+				return
+			}
+
+			CanopyActionsPlacement.OTHER_OPTIONS -> {
+				fragment.setCanopyActionRow(null)
+				fragment.setCanopyActionButtons(emptyList())
+				showMenuActions(value)
+				return
+			}
+
+			CanopyActionsPlacement.ROW -> {
+				fragment.setCanopyActionButtons(emptyList())
+				fragment.setCanopyMenuActions(emptyList())
+			}
 		}
 
 		val layout = CanopyActionLayout.create(value.actions)
@@ -184,6 +214,46 @@ internal class CanopyItemDetailController(
 		}
 
 		fragment.setCanopyActionRow(ListRow(HeaderItem(heading), adapter))
+	}
+
+	/**
+	 * Renders actions as native detail buttons next to Play/Watched. Status
+	 * contributions carry no interaction; their state is visible in the
+	 * action dialogs, so they are only exposed via accessibility here.
+	 */
+	private fun showInlineButtons(value: CanopyItemDetailSurface) {
+		overflowActions = emptyList()
+		val context = fragment.context ?: return
+		val buttonSize = Utils.convertDpToPixel(context, CANOPY_BUTTON_SIZE_DP)
+		val statusDescription = value.statuses.joinToString(separator = " · ") { it.label }
+
+		val buttons = value.actions.map { action ->
+			TextUnderButton.create(
+				context,
+				action.icon.drawable,
+				buttonSize,
+				2,
+				action.label,
+			) {
+				coordinator.prepare(action.id)
+			}.apply {
+				contentDescription = describedLabel(
+					describedLabel(action.label, action.description),
+					statusDescription.takeIf { it.isNotEmpty() },
+				)
+			}
+		}
+		fragment.setCanopyActionButtons(buttons)
+	}
+
+	/** Renders actions as entries in the "Other options" popup menu. */
+	private fun showMenuActions(value: CanopyItemDetailSurface) {
+		overflowActions = emptyList()
+		fragment.setCanopyMenuActions(
+			value.actions.map { action ->
+				CanopyMenuAction(action.label) { coordinator.prepare(action.id) }
+			},
+		)
 	}
 
 	private fun showOverflow() {
@@ -506,6 +576,14 @@ internal fun dispatchCanopyRefresh(
 	if (CanopyRefreshTarget.ITEM_DETAIL_SURFACE in targets) onItemDetailSurface()
 }
 
+internal class CanopyMenuAction(
+	val label: String,
+	private val onSelected: () -> Unit,
+) {
+	fun run() = onSelected()
+}
+
+private const val CANOPY_BUTTON_SIZE_DP = 40
 private const val MAX_CANOPY_TILE_IDS = 5
 private const val CANOPY_ACTION_ID_BASE = Int.MIN_VALUE + 100
 private const val STATUS_TEXT_SIZE_SP = 18f
