@@ -8,6 +8,7 @@ import io.kotest.matchers.shouldBe
 import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
+import okhttp3.Headers
 import okhttp3.Headers.Companion.toHeaders
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -73,6 +74,58 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 			"etag" to listOf("\"sha256-${"a".repeat(64)}\""),
 			CanopyResponseBoundingInterceptor.BOUNDED_HEADER.lowercase() to listOf("1"),
 		)
+	}
+
+	test("SDK boundary rejects repeated protocol fields and retains one canonical strong ETag") {
+		val canonical = "\"sha256-${"c".repeat(64)}\""
+		val secondStrong = "\"sha256-${"d".repeat(64)}\""
+		var etags = listOf(canonical, secondStrong)
+		var contentTypes = listOf("application/json")
+		val responseProvider = Interceptor { chain ->
+			val headers = Headers.Builder().apply {
+				contentTypes.forEach { add("Content-Type", it) }
+				etags.forEach { add("ETag", it) }
+			}.build()
+			response(
+				chain.request(),
+				200,
+				"""{"Available":true,"ProtocolMinimum":1,"ProtocolMaximum":1}""",
+				headers,
+			)
+		}
+		val base = OkHttpClient.Builder()
+			.addInterceptor(CanopyResponseBoundingInterceptor())
+			.addInterceptor(responseProvider)
+			.build()
+		val factory = OkHttpFactory(base)
+		val api = factory.create(
+			"https://example.invalid",
+			"test-access-token",
+			ClientInfo("Canopy header test", "1"),
+			DeviceInfo("test-device", "Test device"),
+			HttpClientOptions(),
+			factory,
+		)
+		val client = CanopyClient(api)
+
+		val boundedDuplicate = ApiClientCanopyTransport(api).request(
+			HttpMethod.GET,
+			CanopyPlatformRoutes.discovery.encodedPath,
+			emptyMap(),
+			null,
+			CanopyPlatformRoutes.discovery.maximumResponseBytes,
+		)
+		boundedDuplicate.headers.entries.single { (name) -> name.equals("ETag", ignoreCase = true) }
+			.value shouldContainExactly etags
+		val repeatedEtag = client.discover() as CanopyCallResult.Success
+		repeatedEtag.etag shouldBe null
+
+		etags = listOf(canonical)
+		val singleEtag = client.discover() as CanopyCallResult.Success
+		singleEtag.etag shouldBe canonical
+
+		contentTypes = listOf("application/json", "application/json")
+		client.discover() shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
 	}
 
 	test("an oversized Platform body stops at route limit plus one and redacts throwable rendering") {
@@ -174,12 +227,19 @@ private fun response(
 	status: Int,
 	body: String,
 	headers: Map<String, String> = mapOf("Content-Type" to "text/plain"),
+) = response(request, status, body, headers.toHeaders())
+
+private fun response(
+	request: Request,
+	status: Int,
+	body: String,
+	headers: Headers,
 ) = Response.Builder()
 	.request(request)
 	.protocol(Protocol.HTTP_1_1)
 	.code(status)
 	.message("Test response")
-	.headers(headers.toHeaders())
+	.headers(headers)
 	.body(body.toResponseBody(headers["Content-Type"]?.toMediaType()))
 	.build()
 

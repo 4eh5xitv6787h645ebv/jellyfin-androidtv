@@ -51,13 +51,17 @@ internal class CanopyResponseBoundingInterceptor : Interceptor {
 	}
 
 	private fun Response.boundedProtocolHeaders(): Headers = Headers.Builder().apply {
-		header(HEADER_CONTENT_TYPE)?.takeIf { it.hasBoundedUtf8(MAX_CONTENT_TYPE_BYTES) }?.let {
-			add(HEADER_CONTENT_TYPE, it)
-		}
-		header(HEADER_ETAG)?.takeIf { it.hasBoundedUtf8(MAX_ETAG_BYTES) }?.let {
-			add(HEADER_ETAG, it)
-		}
+		addAllBounded(HEADER_CONTENT_TYPE, headers.values(HEADER_CONTENT_TYPE), MAX_CONTENT_TYPE_BYTES)
+		addAllBounded(HEADER_ETAG, headers.values(HEADER_ETAG), MAX_ETAG_BYTES)
 	}.build()
+
+	private fun Headers.Builder.addAllBounded(name: String, values: List<String>, maximumBytes: Int) {
+		// Preserve cardinality so the contract layer can reject ambiguous repeated fields.
+		// If any value exceeds the carrier bound, omit the entire field rather than
+		// collapsing an invalid repeated field into an apparently valid singleton.
+		if (values.any { !it.hasBoundedUtf8(maximumBytes) }) return
+		values.forEach { add(name, it) }
+	}
 
 	private fun String.hasBoundedUtf8(maximumBytes: Int) =
 		isNotEmpty() && toByteArray(StandardCharsets.UTF_8).size <= maximumBytes

@@ -347,17 +347,15 @@ internal class CanopyClient internal constructor(
 	private fun invalidResponse(status: Int? = null) =
 		CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, status)
 
-	private fun CanopyHttpResponse.etag(): String? = headers.entries
-		.filter { (name) -> name.equals("ETag", ignoreCase = true) }
+	private fun CanopyHttpResponse.singleHeaderValue(name: String): String? = headers.entries
+		.filter { (headerName) -> headerName.equals(name, ignoreCase = true) }
 		.singleOrNull()
 		?.value
 		?.singleOrNull()
-		?.takeIf(STRONG_ETAG::matches)
 
-	private fun CanopyHttpResponse.hasJsonContentType(): Boolean = headers.entries
-		.firstOrNull { (name) -> name.equals("Content-Type", ignoreCase = true) }
-		?.value
-		?.firstOrNull()
+	private fun CanopyHttpResponse.etag(): String? = singleHeaderValue("ETag")?.takeIf(STRONG_ETAG::matches)
+
+	private fun CanopyHttpResponse.hasJsonContentType(): Boolean = singleHeaderValue("Content-Type")
 		?.substringBefore(';')
 		?.trim()
 		?.equals("application/json", ignoreCase = true) == true
