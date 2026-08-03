@@ -25,13 +25,15 @@ internal class SearchFragmentDelegate(
 	private val backgroundService: BackgroundService,
 	private val itemLauncher: ItemLauncher,
 	private val navigationRepository: NavigationRepository,
+	/** Long-press handler for Seerr cards; supplied by the hosting fragment. */
+	var onLongPress: ((SeerrEntry) -> Boolean)? = null,
 ) {
 	val rowsAdapter = MutableObjectAdapter<Row>(CustomListRowPresenter())
 
 	// The Seerr row and its adapter are deliberately persistent: rebuilding the
 	// row while one of its cards holds focus detaches the focused view and the
 	// next d-pad event crashes FocusFinder (#4). Items are updated in place.
-	private val seerrAdapter = ArrayObjectAdapter(SeerrCardPresenter())
+	private val seerrAdapter = ArrayObjectAdapter(SeerrCardPresenter(onLongPress))
 	private val seerrRow = ListRow(HeaderItem(context.getString(R.string.canopy_seerr_search_row)), seerrAdapter)
 	private var seerrEntries: List<SeerrEntry> = emptyList()
 

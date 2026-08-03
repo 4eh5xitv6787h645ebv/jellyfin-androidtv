@@ -27,6 +27,7 @@ import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRequestOutcome
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrSeason
 import org.jellyfin.androidtv.ui.TextUnderButton
+import org.jellyfin.androidtv.ui.canopy.CanopyQuickActions
 import org.jellyfin.androidtv.ui.itemdetail.MyDetailsOverviewRow
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
@@ -35,6 +36,7 @@ import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter
 import org.jellyfin.androidtv.ui.presentation.MyDetailsOverviewRowPresenter
 import org.jellyfin.androidtv.util.MarkdownRenderer
 import org.jellyfin.androidtv.util.Utils
+import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.MediaType
@@ -64,6 +66,8 @@ class SeerrItemFragment : Fragment() {
 	private val seerrRepository by inject<SeerrRepository>()
 	private val navigationRepository by inject<NavigationRepository>()
 	private val markdownRenderer by inject<MarkdownRenderer>()
+	private val apiClient by inject<ApiClient>()
+	private val quickActions by lazy { CanopyQuickActions(this, apiClient, onChanged = ::refreshDetails) }
 
 	private var rowsFragment: RowsSupportFragment? = null
 	private var rowsAdapter: MutableObjectAdapter<Row>? = null
@@ -93,6 +97,7 @@ class SeerrItemFragment : Fragment() {
 
 	override fun onDestroyView() {
 		super.onDestroyView()
+		quickActions.stop()
 		rowsFragment = null
 		rowsAdapter = null
 		dorPresenter = null
@@ -200,6 +205,13 @@ class SeerrItemFragment : Fragment() {
 					navigationRepository.navigate(Destinations.itemDetails(libraryId))
 				},
 			)
+			// Spoiler Guard / Hidden Content apply to the library item, so they
+			// are offered here for titles the library already has.
+			row.addAction(
+				TextUnderButton.create(context, R.drawable.ic_masks, buttonSize, 2, getString(R.string.canopy_manage)) {
+					quickActions.show(libraryId)
+				},
+			)
 		}
 	}
 
@@ -215,9 +227,10 @@ class SeerrItemFragment : Fragment() {
 
 	private fun loadAdditionalRows(details: SeerrItemDetails) {
 		val adapter = rowsAdapter ?: return
+		val longPress = canopyLongPress(quickActions)
 
 		if (details.cast.isNotEmpty()) {
-			adapter.add(seerrListRow(getString(R.string.canopy_seerr_cast), details.cast))
+			adapter.add(seerrListRow(getString(R.string.canopy_seerr_cast), details.cast, longPress))
 		}
 
 		lifecycleScope.launch {
@@ -234,10 +247,10 @@ class SeerrItemFragment : Fragment() {
 				}
 
 				val similar = seerrRepository.similar(self)
-				if (similar.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_similar), similar))
+				if (similar.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_similar), similar, longPress))
 
 				val recommended = seerrRepository.recommendations(self)
-				if (recommended.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_recommended), recommended))
+				if (recommended.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_recommended), recommended, longPress))
 
 				val moreFrom = details.studio ?: details.network
 				if (moreFrom != null) {
@@ -245,7 +258,27 @@ class SeerrItemFragment : Fragment() {
 						details.studio != null -> seerrRepository.moreFromStudio(moreFrom.id)
 						else -> seerrRepository.moreFromNetwork(moreFrom.id)
 					}.filterNot { it.isSelf() }
-					if (entries.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_more_from, moreFrom.name), entries))
+						.sortedByDescending { it.popularity ?: Double.MIN_VALUE }
+					// Split by kind so a studio's films and series are separate
+					// rows, each most-popular first.
+					val movies = entries.filter { it.mediaType == SeerrMediaType.MOVIE }
+					val series = entries.filter { it.mediaType == SeerrMediaType.TV }
+					if (movies.isNotEmpty()) {
+						add(
+							seerrListRow(
+								getString(R.string.canopy_seerr_more_from_kind, moreFrom.name, getString(R.string.canopy_seerr_movies)),
+								movies,
+							),
+						)
+					}
+					if (series.isNotEmpty()) {
+						add(
+							seerrListRow(
+								getString(R.string.canopy_seerr_more_from_kind, moreFrom.name, getString(R.string.canopy_seerr_series_group)),
+								series,
+							),
+						)
+					}
 				}
 			}
 

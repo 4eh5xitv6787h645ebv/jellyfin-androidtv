@@ -73,6 +73,8 @@
     <string name="lbl_runtime">Runtime</string>
     <string name="lbl_other_options">Other options</string>
     <string name="canopy_actions">Actions</string>
+    <string name="canopy_no_actions">No actions available for this item.</string>
+    <string name="canopy_manage">Manage</string>
     <string name="canopy_actions_with_status">Actions · %1$s</string>
     <string name="canopy_required_label">%1$s (required)</string>
     <string name="canopy_complete_required_fields">Complete the required fields.</string>
@@ -127,6 +129,7 @@
     <string name="canopy_seerr_watchlist">Your watchlist</string>
     <string name="canopy_seerr_part_of">Part of %1$s</string>
     <string name="canopy_seerr_more_from">More from %1$s</string>
+    <string name="canopy_seerr_more_from_kind">More from %1$s · %2$s</string>
     <string name="canopy_seerr_ratings">Ratings</string>
     <string name="canopy_seerr_rating_critics">Critics %1$d%%</string>
     <string name="canopy_seerr_rating_audience">Audience %1$d%%</string>

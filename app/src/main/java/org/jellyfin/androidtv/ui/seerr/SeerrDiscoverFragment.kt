@@ -26,12 +26,14 @@ import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaType
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
+import org.jellyfin.androidtv.ui.canopy.CanopyQuickActions
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter
 import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter
 import org.jellyfin.androidtv.ui.shared.toolbar.MainToolbar
 import org.jellyfin.androidtv.ui.shared.toolbar.MainToolbarActiveButton
 import org.jellyfin.androidtv.util.Utils
+import org.jellyfin.sdk.api.client.ApiClient
 import org.koin.android.ext.android.inject
 
 /**
@@ -43,6 +45,8 @@ import org.koin.android.ext.android.inject
 class SeerrDiscoverFragment : Fragment() {
 	private val seerrRepository by inject<SeerrRepository>()
 	private val navigationRepository by inject<NavigationRepository>()
+	private val apiClient by inject<ApiClient>()
+	private val quickActions by lazy { CanopyQuickActions(this, apiClient) }
 
 	private val rowsAdapter by lazy {
 		MutableObjectAdapter<Row>(CustomListRowPresenter(Utils.convertDpToPixel(requireContext(), 10)))
@@ -116,7 +120,7 @@ class SeerrDiscoverFragment : Fragment() {
 			for ((labelRes, load) in rows) {
 				val entries = load()
 				if (!isAdded) return@launch
-				if (entries.isNotEmpty()) rowsAdapter.add(seerrListRow(getString(labelRes), entries))
+				if (entries.isNotEmpty()) rowsAdapter.add(seerrListRow(getString(labelRes), entries, canopyLongPress(quickActions)))
 			}
 
 			if (isAdded && rowsAdapter.size() == 0) {

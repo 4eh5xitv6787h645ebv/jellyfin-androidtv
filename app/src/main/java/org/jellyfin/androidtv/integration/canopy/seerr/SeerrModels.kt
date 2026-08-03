@@ -29,6 +29,7 @@ internal data class SeerrSearchResultDto(
 	val firstAirDate: String? = null,
 	val posterPath: String? = null,
 	val profilePath: String? = null,
+	val popularity: Double? = null,
 	val mediaInfo: SeerrMediaInfoDto? = null,
 )
 
@@ -230,6 +231,7 @@ internal data class SeerrDiscoverItem(
 	val status: SeerrMediaStatus,
 	val status4k: SeerrMediaStatus,
 	val jellyfinMediaId: UUID?,
+	val popularity: Double? = null,
 ) : SeerrEntry
 
 /** An actor or other person from search results or credits. */

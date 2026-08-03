@@ -19,6 +19,7 @@ import org.jellyfin.androidtv.databinding.FragmentFullDetailsBinding
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaType
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrPersonDetails
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
+import org.jellyfin.androidtv.ui.canopy.CanopyQuickActions
 import org.jellyfin.androidtv.ui.itemdetail.MyDetailsOverviewRow
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter
@@ -26,6 +27,7 @@ import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter
 import org.jellyfin.androidtv.ui.presentation.MyDetailsOverviewRowPresenter
 import org.jellyfin.androidtv.util.MarkdownRenderer
 import org.jellyfin.androidtv.util.Utils
+import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.MediaType
@@ -44,6 +46,8 @@ class SeerrPersonFragment : Fragment() {
 	private val seerrRepository by inject<SeerrRepository>()
 	private val navigationRepository by inject<NavigationRepository>()
 	private val markdownRenderer by inject<MarkdownRenderer>()
+	private val apiClient by inject<ApiClient>()
+	private val quickActions by lazy { CanopyQuickActions(this, apiClient) }
 
 	private var rowsFragment: RowsSupportFragment? = null
 
@@ -65,6 +69,7 @@ class SeerrPersonFragment : Fragment() {
 
 	override fun onDestroyView() {
 		super.onDestroyView()
+		quickActions.stop()
 		rowsFragment = null
 	}
 
@@ -113,8 +118,9 @@ class SeerrPersonFragment : Fragment() {
 
 		val movies = credits.filter { it.mediaType == SeerrMediaType.MOVIE }
 		val series = credits.filter { it.mediaType == SeerrMediaType.TV }
-		if (movies.isNotEmpty()) adapter.add(seerrListRow(getString(R.string.canopy_seerr_movies), movies))
-		if (series.isNotEmpty()) adapter.add(seerrListRow(getString(R.string.canopy_seerr_series_group), series))
+		val longPress = canopyLongPress(quickActions)
+		if (movies.isNotEmpty()) adapter.add(seerrListRow(getString(R.string.canopy_seerr_movies), movies, longPress))
+		if (series.isNotEmpty()) adapter.add(seerrListRow(getString(R.string.canopy_seerr_series_group), series, longPress))
 
 		// Claim focus for asynchronously loaded content; see SeerrItemFragment.
 		fragment.view?.post { fragment.view?.requestFocus() }

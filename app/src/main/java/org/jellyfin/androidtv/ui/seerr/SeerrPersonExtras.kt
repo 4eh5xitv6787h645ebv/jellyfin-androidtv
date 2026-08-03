@@ -4,6 +4,7 @@ import androidx.leanback.widget.Row
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaType
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.preference.UserPreferences
 import org.jellyfin.androidtv.ui.itemdetail.FullDetailsFragment
@@ -49,6 +50,23 @@ fun addSeerrPersonCreditsRow(fragment: FullDetailsFragment, adapter: MutableObje
 		val credits = repository.personCredits(personId)
 		if (!fragment.isAdded || credits.isEmpty()) return@launch
 
-		adapter.add(seerrListRow(fragment.getString(R.string.canopy_seerr_more_from, personName), credits))
+		val movies = credits.filter { it.mediaType == SeerrMediaType.MOVIE }
+		val series = credits.filter { it.mediaType == SeerrMediaType.TV }
+		if (movies.isNotEmpty()) {
+			adapter.add(
+				seerrListRow(
+					fragment.getString(R.string.canopy_seerr_more_from_kind, personName, fragment.getString(R.string.canopy_seerr_movies)),
+					movies,
+				),
+			)
+		}
+		if (series.isNotEmpty()) {
+			adapter.add(
+				seerrListRow(
+					fragment.getString(R.string.canopy_seerr_more_from_kind, personName, fragment.getString(R.string.canopy_seerr_series_group)),
+					series,
+				),
+			)
+		}
 	}
 }

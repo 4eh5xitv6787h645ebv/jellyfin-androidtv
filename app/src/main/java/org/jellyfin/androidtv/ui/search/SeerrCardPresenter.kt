@@ -47,21 +47,34 @@ import org.jellyfin.androidtv.util.getActivity
  * [org.jellyfin.androidtv.ui.presentation.CardPresenter] uses for library
  * items, so Seerr rows are visually indistinguishable from native rows.
  */
-class SeerrCardPresenter : Presenter() {
+internal class SeerrCardPresenter(
+	/**
+	 * Invoked on long-press (or MENU) over a card, mirroring how native cards
+	 * open their context actions. Returns true when handled.
+	 */
+	private val onLongPress: ((SeerrEntry) -> Boolean)? = null,
+) : Presenter() {
 	override fun onCreateViewHolder(parent: ViewGroup): ViewHolder {
-		val view = ComposeView(parent.context).apply {
-			setParentCompositionContext(parent.findViewTreeCompositionContext())
-			setViewTreeLifecycleOwner(parent.findViewTreeLifecycleOwner())
-			setViewTreeSavedStateRegistryOwner(parent.findViewTreeSavedStateRegistryOwner())
-			isFocusable = true
-			isFocusableInTouchMode = true
+		val holder = SeerrCardViewHolder(
+			ComposeView(parent.context).apply {
+				setParentCompositionContext(parent.findViewTreeCompositionContext())
+				setViewTreeLifecycleOwner(parent.findViewTreeLifecycleOwner())
+				setViewTreeSavedStateRegistryOwner(parent.findViewTreeSavedStateRegistryOwner())
+				isFocusable = true
+				isFocusableInTouchMode = true
+			},
+		)
 
-			setOnLongClickListener {
-				context.getActivity()?.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU)) ?: false
+		holder.view.setOnLongClickListener {
+			val entry = holder.entry
+			when {
+				entry != null && onLongPress?.invoke(entry) == true -> true
+				else -> holder.view.context.getActivity()
+					?.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU)) ?: false
 			}
 		}
 
-		return SeerrCardViewHolder(view)
+		return holder
 	}
 
 	override fun onBindViewHolder(viewHolder: ViewHolder, item: Any?) {
@@ -78,6 +91,7 @@ class SeerrCardPresenter : Presenter() {
 	}
 
 	private class SeerrCardViewHolder(composeView: ComposeView) : ViewHolder(composeView) {
+		val entry: SeerrEntry? get() = _item.value
 		private val _item = MutableStateFlow<SeerrEntry?>(null)
 		private val _focused = MutableStateFlow(false)
 

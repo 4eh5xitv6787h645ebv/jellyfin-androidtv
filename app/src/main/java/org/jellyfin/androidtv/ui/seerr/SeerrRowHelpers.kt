@@ -17,16 +17,37 @@ import org.jellyfin.androidtv.integration.canopy.seerr.SeerrEntry
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrGenreItem
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaStatus
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrPersonItem
+import org.jellyfin.androidtv.ui.canopy.CanopyQuickActions
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.jellyfin.androidtv.ui.search.SeerrCardPresenter
 import org.jellyfin.androidtv.util.dp
 
 /** Builds a native list row of Seerr entries. */
-internal fun seerrListRow(header: String, entries: List<SeerrEntry>): ListRow = ListRow(
+internal fun seerrListRow(
+	header: String,
+	entries: List<SeerrEntry>,
+	onLongPress: ((SeerrEntry) -> Boolean)? = null,
+): ListRow = ListRow(
 	HeaderItem(header),
-	ArrayObjectAdapter(SeerrCardPresenter()).apply { entries.forEach(::add) },
+	ArrayObjectAdapter(SeerrCardPresenter(onLongPress)).apply { entries.forEach(::add) },
 )
+
+/**
+ * Long-press handler that opens Canopy actions (Spoiler Guard, Hidden
+ * Content, …) for a Seerr card. Only titles already in the library have a
+ * Jellyfin item to act on; anything else declines so the default context
+ * behavior runs.
+ */
+internal fun canopyLongPress(quickActions: CanopyQuickActions): (SeerrEntry) -> Boolean = { entry ->
+	val libraryId = (entry as? SeerrDiscoverItem)?.jellyfinMediaId
+	if (libraryId != null) {
+		quickActions.show(libraryId)
+		true
+	} else {
+		false
+	}
+}
 
 /**
  * Routes a click on any Seerr entry to its native destination. Media already

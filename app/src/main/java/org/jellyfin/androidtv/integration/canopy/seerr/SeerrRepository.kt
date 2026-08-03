@@ -113,9 +113,9 @@ internal class SeerrRepository(
 	suspend fun trending(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/trending")
 	suspend fun watchlist(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/watchlist")
 	suspend fun moreFromStudio(studioId: Long): List<SeerrDiscoverItem> =
-		discover("/JellyfinCanopy/seerr/discover/movies/studio/$studioId")
+		discoverByPopularity("/JellyfinCanopy/seerr/discover/movies/studio/$studioId")
 	suspend fun moreFromNetwork(networkId: Long): List<SeerrDiscoverItem> =
-		discover("/JellyfinCanopy/seerr/discover/tv/network/$networkId")
+		discoverByPopularity("/JellyfinCanopy/seerr/discover/tv/network/$networkId")
 	suspend fun popularMovies(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/movies")
 	suspend fun upcomingMovies(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/movies/upcoming")
 	suspend fun popularSeries(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/tv")
@@ -234,10 +234,10 @@ internal class SeerrRepository(
 	}
 
 	suspend fun similar(item: SeerrDiscoverItem): List<SeerrDiscoverItem> =
-		discover("/JellyfinCanopy/seerr/${item.mediaType.wireValue}/${item.tmdbId}/similar")
+		discoverByPopularity("/JellyfinCanopy/seerr/${item.mediaType.wireValue}/${item.tmdbId}/similar")
 
 	suspend fun recommendations(item: SeerrDiscoverItem): List<SeerrDiscoverItem> =
-		discover("/JellyfinCanopy/seerr/${item.mediaType.wireValue}/${item.tmdbId}/recommendations")
+		discoverByPopularity("/JellyfinCanopy/seerr/${item.mediaType.wireValue}/${item.tmdbId}/recommendations")
 
 	/** Full details for a movie or series, or null when unavailable. */
 	suspend fun details(mediaType: SeerrMediaType, tmdbId: Long): SeerrItemDetails? = try {
@@ -282,7 +282,7 @@ internal class SeerrRepository(
 		null
 	}
 
-	/** A person's movie and series credits, newest first, deduplicated. */
+	/** A person's movie and series credits, most popular first, deduplicated. */
 	suspend fun personCredits(personId: Long): List<SeerrDiscoverItem> = try {
 		fetch<SeerrPersonCreditsDto>(
 			"/JellyfinCanopy/seerr/person/$personId/combined_credits",
@@ -291,7 +291,7 @@ internal class SeerrRepository(
 			.cast
 			.mapNotNull { it.toDiscoverItem() }
 			.distinctBy { it.mediaType to it.tmdbId }
-			.sortedByDescending { it.year ?: Int.MIN_VALUE }
+			.sortedByDescending { it.popularity ?: Double.MIN_VALUE }
 			.take(MAX_CREDITS_RESULTS)
 	} catch (error: ApiClientException) {
 		Timber.d(error, "Seerr person credits failed for %d", personId)
@@ -370,6 +370,10 @@ internal class SeerrRepository(
 		.filterIsInstance<SeerrDiscoverItem>()
 		.take(MAX_ROW_RESULTS)
 
+	/** Discover results ordered most popular first, for follow-up rows. */
+	private suspend fun discoverByPopularity(path: String): List<SeerrDiscoverItem> =
+		discover(path).sortedByDescending { it.popularity ?: Double.MIN_VALUE }
+
 	private suspend fun list(
 		path: String,
 		query: Map<String, Any>,
@@ -417,6 +421,7 @@ internal class SeerrRepository(
 			status = SeerrMediaStatus.fromWire(mediaInfo?.status),
 			status4k = SeerrMediaStatus.fromWire(mediaInfo?.status4k),
 			jellyfinMediaId = (mediaInfo?.jellyfinMediaId ?: mediaInfo?.jellyfinMediaId4k)?.toUUIDOrNull(),
+			popularity = popularity,
 		)
 	}
 
