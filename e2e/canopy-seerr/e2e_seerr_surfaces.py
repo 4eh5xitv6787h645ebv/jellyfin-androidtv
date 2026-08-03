@@ -84,7 +84,8 @@ def main():
 			if d.has_text('Request seasons'):
 				save_evidence('04a-season-picker')
 				# season list defaults all-checked; move to the Request button and confirm
-				if d.dpad_until(lambda t: t and set(t) <= {'Request'}, atv.KEY_DOWN, 12):
+				# AlertDialog renders its buttons in all caps
+				if d.dpad_until(lambda t: t and {x.upper() for x in t} <= {'REQUEST'}, atv.KEY_DOWN, 12):
 					d.key(atv.KEY_CENTER)
 			time.sleep(8)
 			after_posts = len(d.requests('seerr/request'))
