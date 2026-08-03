@@ -132,6 +132,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     private MyDetailsOverviewRowPresenter mDorPresenter;
     private MyDetailsOverviewRow mDetailsOverviewRow;
     private CustomListRowPresenter mListRowPresenter;
+    private CanopyItemDetailController mCanopyController;
+    private ListRow mCanopyActionRow;
 
     private Handler mLoopHandler = new Handler();
     private Runnable mClockLoop;
@@ -170,6 +172,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
         mRowsFragment.setOnItemViewSelectedListener(new ItemViewSelectedListener());
 
         mDorPresenter = new MyDetailsOverviewRowPresenter(markdownRenderer.getValue());
+        mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue());
 
         mItemId = Utils.uuidOrNull(getArguments().getString("ItemId"));
         mChannelId = Utils.uuidOrNull(getArguments().getString("ChannelId"));
@@ -226,6 +229,10 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     @Override
     public void onResume() {
         super.onResume();
+
+        if (mCanopyController != null && mBaseItem != null && mRowsAdapter != null) {
+            mCanopyController.bind(mBaseItem.getId());
+        }
 
         ClockBehavior clockBehavior = userPreferences.getValue().get(UserPreferences.Companion.getClockBehavior());
         if (clockBehavior == ClockBehavior.ALWAYS || clockBehavior == ClockBehavior.IN_MENUS) {
@@ -288,6 +295,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     public void onStop() {
         super.onStop();
         stopClock();
+        if (mCanopyController != null) mCanopyController.stop();
     }
 
     @Override
@@ -469,6 +477,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
             super.onPostExecute(detailsOverviewRow);
 
             if (!getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
+            if (mBaseItem == null || !detailsOverviewRow.getItem().getId().equals(mBaseItem.getId())) return;
 
             ClassPresenterSelector ps = new ClassPresenterSelector();
             ps.addClassPresenter(MyDetailsOverviewRow.class, mDorPresenter);
@@ -480,8 +489,22 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
             updateInfo(detailsOverviewRow.getItem());
             addAdditionalRows(mRowsAdapter);
+            mCanopyController.bind(detailsOverviewRow.getItem().getId());
 
         }
+    }
+
+    void setCanopyActionRow(@Nullable ListRow row) {
+        if (mRowsAdapter == null) return;
+        if (mCanopyActionRow != null) mRowsAdapter.remove(mCanopyActionRow);
+        mCanopyActionRow = row;
+        if (row != null) mRowsAdapter.add(Math.min(1, mRowsAdapter.size()), row);
+    }
+
+    void refreshCanopyItem(UUID itemId) {
+        if (mBaseItem == null || !mBaseItem.getId().equals(itemId)) return;
+        if (!getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
+        loadItem(itemId);
     }
 
     public void setBaseItem(BaseItemDto item) {
@@ -1189,6 +1212,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
         public void onItemClicked(final Presenter.ViewHolder itemViewHolder, Object item,
                                   RowPresenter.ViewHolder rowViewHolder, Row row) {
 
+            if (mCanopyController != null && mCanopyController.handleClick(item)) return;
             if (!(item instanceof BaseRowItem)) return;
             itemLauncher.getValue().launch((BaseRowItem) item, (ItemRowAdapter) ((ListRow) row).getAdapter(), requireContext());
         }

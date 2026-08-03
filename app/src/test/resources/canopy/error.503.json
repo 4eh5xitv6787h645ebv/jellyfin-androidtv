@@ -1,0 +1,7 @@
+{
+  "Error": true,
+  "Code": "unavailable",
+  "Message": "Temporarily unavailable.",
+  "Retryable": true,
+  "CorrelationId": "0123456789abcdef0123456789abcdef"
+}

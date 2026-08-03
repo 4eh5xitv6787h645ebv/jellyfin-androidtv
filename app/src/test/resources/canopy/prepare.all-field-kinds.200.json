@@ -1,0 +1,46 @@
+{
+  "Capability": "opaque-invoke-capability",
+  "ExpiresAtUtc": "2026-08-02T16:30:00Z",
+  "Title": "Apply settings",
+  "SubmitLabel": "Apply",
+  "CancelLabel": "Cancel",
+  "Fields": [
+    {
+      "Id": "confirm",
+      "Kind": "confirmation",
+      "Label": "Continue?",
+      "Required": true,
+      "DefaultChecked": false
+    },
+    {
+      "Id": "enabled",
+      "Kind": "boolean",
+      "Label": "Enabled",
+      "Required": true,
+      "DefaultChecked": true
+    },
+    {
+      "Id": "quality",
+      "Kind": "single_select",
+      "Label": "Quality",
+      "Required": true,
+      "Options": [
+        {"Id": "a", "Label": "Option A"},
+        {"Id": "b", "Label": "Option B", "Disabled": true}
+      ],
+      "DefaultOptionIds": ["a"]
+    },
+    {
+      "Id": "targets",
+      "Kind": "multi_select",
+      "Label": "Targets",
+      "Options": [
+        {"Id": "x", "Label": "Target X"},
+        {"Id": "y", "Label": "Target Y"}
+      ],
+      "DefaultOptionIds": ["x"],
+      "MinimumSelections": 0,
+      "MaximumSelections": 2
+    }
+  ]
+}

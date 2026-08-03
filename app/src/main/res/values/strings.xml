@@ -72,6 +72,13 @@
     <string name="lbl_last_played">"Last played "</string>
     <string name="lbl_runtime">Runtime</string>
     <string name="lbl_other_options">Other options</string>
+    <string name="canopy_actions">Actions</string>
+    <string name="canopy_actions_with_status">Actions · %1$s</string>
+    <string name="canopy_required_label">%1$s (required)</string>
+    <string name="canopy_complete_required_fields">Complete the required fields.</string>
+    <string name="canopy_action_succeeded">Action completed.</string>
+    <string name="canopy_action_unavailable">This action is unavailable.</string>
+    <string name="canopy_action_expired">This action expired. Open it again to continue.</string>
     <string name="lbl_people">People</string>
     <string name="lbl_videos">Videos</string>
     <string name="lbl_recordings">Recordings</string>

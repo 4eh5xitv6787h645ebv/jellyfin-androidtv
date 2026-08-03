@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "recordedUtc": "2026-08-03T08:08:18Z",
+  "android": {
+    "featureRunHead": "ccbc6dc711cde555ebb585ca06c508e67da69ca2",
+    "finalHead": "828f88f29c47b50ab259b7e69cb690aec7cc1962",
+    "finalTree": "a79313933ac2f5b443c7890d1e490b7ce398a4a5",
+    "featureRunApkSha256": "06a0995ae4f4cb622c281699948776b9f5995546b59bcd6c238da9082764c15d",
+    "finalApkSha256": "5ce05dda88560bab89294b28b1fe8d1e8fe517ac2c24043572ec5ed73afdcfef",
+    "baseCommit": "204d667cf110b9933da1a0af60260d48548413d9",
+    "baseApkSha256": "d2df5d0d4857c0d53dc43d1ac6358910e819db2d8e2e4e2f07e14e4032e729d9",
+    "package": "org.jellyfin.androidtv.debug",
+    "emulator": "emulator-5560",
+    "api": 34,
+    "abi": "x86",
+    "display": "1920x1080@320"
+  },
+  "canopy": {
+    "featureRunHead": "81d6fff706f1386b0a87574a18e48c098d3106b9",
+    "finalHead": "2a1a1666ffc18ccba2d6b5758bf8db42fa43fcc4",
+    "finalTree": "cd395908c1042047431911612338f5dd83e1363f",
+    "featureRunDllSha256": "37359b268bb2219bc1f9cad541883d44634e2ec07034d6d13d8cb1213a58c603",
+    "finalDllSha256": "ceb26bdf3ac3f25aae4fd52a5e66f11e563c42d40e2fb3e260413e1e98c2b656",
+    "jellyfinVersion": "12.0.0",
+    "livePilot": "4 passed (17.0s)"
+  },
+  "scenarios": {
+    "genericCatalog": "pass",
+    "hiddenHideFilterUnhide": "pass",
+    "spoilerEnableContentRefreshDisable": "pass",
+    "seerrStandardRequestPendingDuplicate": "pass",
+    "providerUnavailableRecovery": "pass",
+    "platformDisableRecovery": "pass",
+    "dialogBackNoMutation": "pass",
+    "hostOfflineRecovery": "pass",
+    "baseToHeadReplacementSession": "pass",
+    "serverActorIsolationAndRevocation": "pass"
+  },
+  "manualEmulatorScope": {
+    "seerr4k": "covered by server and Android unit tests, not this manual emulator run",
+    "seerrDenied": "covered by server and Android unit tests, not this manual emulator run",
+    "androidTwoAccountSwitch": "not exercised; server actor isolation and live parental revocation passed"
+  },
+  "finalState": {
+    "platformEnabled": true,
+    "providerHealthy": true,
+    "alphaVisible": true,
+    "guardProtected": false,
+    "deltaStandardRequest": "pending fixture"
+  }
+}
