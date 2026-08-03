@@ -18,8 +18,7 @@ try:
 except ImportError:
 	import xml.etree.ElementTree as ET
 
-import tempfile
-UI_XML = tempfile.gettempdir() + '/atv-ui.xml'
+UI_XML = '/tmp/claude-1000/-home-jake/2f15395f-220f-41fe-95ee-50912ee56074/scratchpad/atv-ui.xml'
 
 KEY_BACK = 4
 KEY_UP = 19
@@ -162,6 +161,11 @@ class Device:
 		return []
 
 	# -- dpad navigation ----------------------------------------------------
+
+	def long_press(self, code=KEY_CENTER, delay=1.5):
+		"""Long-press a key (opens context actions on focused cards)."""
+		self.shell('input', 'keyevent', '--longpress', str(code))
+		time.sleep(delay)
 
 	def dpad_until(self, predicate, key=KEY_DOWN, max_steps=12, delay=1.5):
 		"""Press `key` until predicate(focused_texts) is true. Checks before

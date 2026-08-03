@@ -41,7 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.preference.UserPreferences
-import org.jellyfin.androidtv.ui.settings.compat.rememberPreference
+import org.jellyfin.androidtv.ui.settings.compat.observePreference
 import org.jellyfin.androidtv.ui.playback.MediaManager
 import org.jellyfin.androidtv.ui.settings.compat.SettingsViewModel
 import org.jellyfin.androidtv.util.apiclient.getUrl
@@ -153,7 +153,7 @@ private fun MainToolbar(
 					// not disabled the Seerr surfaces.
 					val userPreferences = koinInject<UserPreferences>()
 					val seerrRepository = koinInject<SeerrRepository>()
-					val seerrEnabled by rememberPreference(userPreferences, UserPreferences.canopySeerrSearchEnabled)
+					val seerrEnabled by observePreference(userPreferences, UserPreferences.canopySeerrSearchEnabled)
 					val seerrAvailable by seerrRepository.availability.collectAsState()
 					LaunchedEffect(seerrEnabled) {
 						if (seerrEnabled) seerrRepository.capabilities()

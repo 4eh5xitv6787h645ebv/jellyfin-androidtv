@@ -17,15 +17,38 @@ Actions row on library items.
 ## Running
 
 ```
-python3 e2e_seerr_surfaces.py <serial> [package]
-# e.g. against a TV device running the release build:
-python3 e2e_seerr_surfaces.py 192.168.0.42:5555 org.jellyfin.androidtv
-# or an emulator running the debug build:
+python3 e2e_seerr_surfaces.py <serial> [package] [options]
+# emulator, debug build:
 python3 e2e_seerr_surfaces.py emulator-5554 org.jellyfin.androidtv.debug
+# TV device, release build:
+python3 e2e_seerr_surfaces.py 192.168.0.42:5555 org.jellyfin.androidtv
 ```
 
-Each step prints PASS/FAIL and saves the raw UI dump under `e2e-evidence/`.
-Exit code 0 means every step passed.
+Options:
+
+| Option | Effect |
+|---|---|
+| `--only a,b` | run just those scenarios — verify one change without paying for the suite |
+| `--list` | list scenario names |
+| `--cold` | force-stop and relaunch before every scenario (old behavior; for benchmarking or isolating cross-scenario interference) |
+
+Scenarios: `toolbar`, `discover`, `person`, `search`, `long-press`, `library`,
+`settings`. Each step prints PASS/FAIL and saves the raw UI dump under
+`e2e-evidence/`; exit code 0 means everything selected passed.
+
+Scenarios share one app session, returning Home by unwinding the back stack
+instead of restarting. Measured on the emulator, whole suite:
+
+| Mode | Time |
+|---|---:|
+| `--cold` (restart per scenario) | 150.2 s |
+| shared session (default) | 115.9 s |
+| `--only settings` | 15.5 s |
+
+Steps whose preconditions the connected server cannot satisfy (an item with no
+cast, no Seerr result linked to the library) report as passed with a
+`skipped` note rather than failing — check the note before treating such a run
+as full coverage.
 
 **Note:** the Request step submits a real request to the connected Seerr
 instance. Point the server at a development Seerr instance.

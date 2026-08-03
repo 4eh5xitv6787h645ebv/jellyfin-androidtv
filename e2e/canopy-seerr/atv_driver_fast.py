@@ -347,6 +347,12 @@ class Device:
         texts = self.texts()
         return any(any(n in t for t in texts) for n in needles)
 
+    def long_press(self, code=KEY_CENTER, delay=1.2):
+        """Long-press a key. scrcpy's control protocol has no press-and-hold
+        for a single key, so this goes through the persistent shell."""
+        self._sh.run('input keyevent --longpress %d' % code)
+        time.sleep(delay)
+
     def wait_text(self, *needles, timeout=10):
         """Poll (cheap now) until any needle appears. Extra helper - dumps are
         fast enough that polling replaces fixed sleeps."""

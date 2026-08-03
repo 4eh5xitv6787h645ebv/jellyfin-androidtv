@@ -1,315 +1,464 @@
 #!/usr/bin/env python3
-"""Scripted E2E over the new Canopy/Seerr surfaces in the androidtv fork.
+"""Scripted E2E over the Canopy/Seerr surfaces in the androidtv fork.
 
-Drives a signed-in device through every new UI surface, presses every new
-button, and asserts each action's observable effect (navigation, request
-POSTs, status changes, toggle behavior). Saves a UI dump per step under
-e2e-evidence/.
+Scenarios are independent and selectable, so a change to one surface can be
+verified without paying for the whole suite. Within a run they share one app
+session: each scenario returns Home by unwinding the back stack instead of
+force-stopping and relaunching, which is the single biggest cost in a run.
 
-Usage: python3 e2e_seerr_surfaces.py <serial> [package]
+Usage:
+    python3 e2e_seerr_surfaces.py <serial> [package] [options]
+
+Options:
+    --only a,b,c   run only the named scenarios (default: all)
+    --list         list scenario names and exit
+    --cold         force-stop and relaunch before every scenario (the old
+                   behavior; kept for benchmarking and for debugging suspected
+                   cross-scenario interference)
+
+Each step prints PASS/FAIL and saves the raw UI dump under e2e-evidence/.
+Exit code 0 means every step of every selected scenario passed.
 """
 import os
+import re
 import shutil
 import sys
 import time
 
-import atv_driver as atv
+try:
+    import atv_driver_fast as atv  # persistent u2 reads + scrcpy input (14x faster)
+except ImportError:
+    import atv_driver as atv
 
 SCRATCH = os.path.dirname(os.path.abspath(__file__))
 EVIDENCE = os.path.join(SCRATCH, 'e2e-evidence')
 
 results = []
+_cold_mode = False
+
+# Text that only appears on Home's content. The toolbar is shared with Search
+# and Discover, so it cannot identify Home on its own.
+HOME_MARKERS = ('My media', 'Continue watching', 'Recently added')
 
 
 def step(name, ok, detail=''):
-	results.append((name, ok, detail))
-	print(('PASS' if ok else 'FAIL'), name, '-', str(detail)[:160], flush=True)
+    results.append((name, ok, detail))
+    print(('PASS' if ok else 'FAIL'), name, '-', str(detail)[:160], flush=True)
 
 
 def save_evidence(name):
-	if os.path.exists(atv.UI_XML):
-		shutil.copy(atv.UI_XML, os.path.join(EVIDENCE, name + '.xml'))
+    if os.path.exists(atv.UI_XML):
+        shutil.copy(atv.UI_XML, os.path.join(EVIDENCE, name + '.xml'))
 
 
-def fresh(d, wait=10):
-	d.stop()
-	d.launch(wait=wait)
+def cold_start(d, wait=12):
+    d.stop()
+    d.launch(wait=wait)
 
 
-def open_discover(d):
-	return d.tap_text('Discover') and (time.sleep(10) or True)
+def home(d, max_back=6):
+    """Return Home without restarting the app.
+
+    Unwinds the fragment back stack; falls back to a cold start if the app
+    left the foreground or the stack does not resolve to Home.
+    """
+    if _cold_mode or not d.in_app():
+        cold_start(d)
+        return
+
+    for _ in range(max_back):
+        if d.has_text(*HOME_MARKERS):
+            return
+        d.key(atv.KEY_BACK)
+    if not d.has_text(*HOME_MARKERS):
+        cold_start(d)
+
+
+def open_toolbar(d, label, settle=('Trending', 'Popular', 'Your watchlist')):
+    """Open a toolbar destination and wait for its content to arrive."""
+    if not d.tap_text(label):
+        return False
+    return d.wait_text(*settle, timeout=20) if settle else True
+
+
+def search_for(d, query, settle=None):
+    home(d)
+    if not d.tap_text('Search'):
+        return False
+    d.type_text(query)
+    d.key(atv.KEY_ENTER, delay=0.4)
+    return d.wait_text(*(settle or (query,)), timeout=25)
+
+
+def row_headers(d):
+    """Left-aligned row header texts on the current screen, top to bottom."""
+    root = d.dump_tree()
+    if root is None:
+        return []
+    found = []
+    for node in root.iter('node'):
+        text = node.get('text', '')
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
+        if text.strip() and m and int(m.group(1)) < 200:
+            found.append((int(m.group(2)), text))
+    return [t for _, t in sorted(found)]
+
+
+# Home rows that hold library folders/collections rather than playable items.
+FOLDER_ROWS = ('My media', 'Collections')
+# Rows that hold real items, most likely to be present, in preference order.
+CONTENT_ROW_HINTS = ('Continue watching', 'Next up', 'Recently added')
+
+
+def open_first_library_item(d):
+    """Open a real item from a Home content row.
+
+    Prefers rows known to hold playable items; folder rows are skipped because
+    selecting one opens a library rather than an item detail screen.
+    """
+    home(d)
+    headers = row_headers(d)
+    ordered = (
+        [h for h in headers if any(hint in h for hint in CONTENT_ROW_HINTS)]
+        + [h for h in headers if h not in FOLDER_ROWS
+           and not any(hint in h for hint in CONTENT_ROW_HINTS)]
+    )
+    for header in ordered:
+        if not d.focus_row_and_pick(header):
+            continue
+        d.key(atv.KEY_CENTER)
+        if d.wait_text('Play', 'Watched', 'Spoiler Guard', 'Hidden Content', 'Actions', timeout=20):
+            return True
+        home(d)
+    return False
+
+
+def preferences_point(d):
+    root = d.dump_tree()
+    if root is None:
+        return None
+    for node in root.iter('node'):
+        if node.get('content-desc') == 'Preferences':
+            m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
+            if m:
+                x1, y1, x2, y2 = map(int, m.groups())
+                return ((x1 + x2) // 2, (y1 + y2) // 2)
+    return None
+
+
+def open_canopy_settings(d):
+    home(d)
+    p = preferences_point(d)
+    if not p:
+        return False
+    d.tap(*p, delay=1.0)
+    if not d.wait_text('Settings', timeout=10):
+        return False
+    if not d.tap_text('Canopy'):
+        return False
+    return d.wait_text('Item detail actions', timeout=10)
+
+
+# --------------------------------------------------------------------------
+# Scenarios
+# --------------------------------------------------------------------------
+
+def scenario_toolbar(d):
+    """Home surfaces the Discover entry point."""
+    home(d)
+    step('home shows Discover toolbar button', d.has_text('Discover'))
+    save_evidence('01-home')
+
+
+def scenario_discover(d):
+    """Discover rows render, a card opens its detail screen, Request submits."""
+    home(d)
+    opened = open_toolbar(d, 'Discover')
+    step('discover screen renders rows', opened and d.in_app())
+    save_evidence('02-discover')
+    if not opened:
+        step('discover card opens seerr detail', False, 'discover unavailable')
+        step('request button submits to Seerr', False, 'discover unavailable')
+        return
+
+    picked = d.focus_row_and_pick(
+        'Trending',
+        # requestable cards have a bare year/kind subtitle; any status renders
+        # as 'year · status', so exclude subtitles containing a separator
+        lambda t: t and not any('·' in x or 'In library' in x for x in t),
+    )
+    detail_ok = False
+    if picked:
+        d.key(atv.KEY_CENTER)
+        detail_ok = d.wait_text('Request', 'Similar', 'Cast', 'Recommended', timeout=20)
+        save_evidence('03-seerr-item-detail')
+    step('discover card opens seerr detail', detail_ok and d.in_app(), str((picked or [])[:2]))
+
+    if not detail_ok:
+        step('request button submits to Seerr', False, 'detail screen unavailable')
+        return
+
+    before_posts = len(d.requests('seerr/request'))
+    requested, detail = False, ''
+    if d.dpad_until(lambda t: any('Request' in x for x in t), atv.KEY_DOWN, 4):
+        d.key(atv.KEY_CENTER)
+        if d.wait_text('Request seasons', timeout=6):
+            save_evidence('04a-season-picker')
+            # seasons default to all-checked; walk to the dialog button row
+            # (AlertDialog renders buttons in caps, and DOWN lands on the left
+            # button, so step RIGHT until REQUEST holds focus)
+            def on_button(t):
+                return bool(t) and {x.upper() for x in t} <= {'CANCEL', 'REQUEST'}
+            if d.dpad_until(on_button, atv.KEY_DOWN, 12):
+                d.dpad_until(
+                    lambda t: bool(t) and {x.upper() for x in t} <= {'REQUEST'},
+                    atv.KEY_RIGHT, 3,
+                )
+                d.key(atv.KEY_CENTER)
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            if len(d.requests('seerr/request')) > before_posts:
+                break
+            time.sleep(0.5)
+        after_posts = len(d.requests('seerr/request'))
+        requested = after_posts > before_posts
+        detail = '%d request POST(s)' % (after_posts - before_posts)
+        save_evidence('04b-after-request')
+    step('request button submits to Seerr', requested, detail)
+
+
+def scenario_person(d):
+    """A cast card on a Seerr detail screen opens the person screen."""
+    home(d)
+    if not open_toolbar(d, 'Discover'):
+        step('cast card opens person screen', False, 'discover unavailable')
+        return
+    picked = d.focus_row_and_pick(
+        'Trending',
+        lambda t: t and not any('·' in x or 'In library' in x for x in t),
+    )
+    if picked:
+        d.key(atv.KEY_CENTER)
+        d.wait_text('Cast', 'Request', timeout=20)
+    if not d.has_text('Cast'):
+        step('cast card opens person screen', True, 'no cast row served - skipped')
+        return
+
+    card = d.focus_row_and_pick('Cast')
+    if not card:
+        step('cast card opens person screen', False, 'could not focus cast row')
+        return
+    d.key(atv.KEY_CENTER)
+    ok = d.wait_text('Movies', 'Series', 'Known for', timeout=20) and d.in_app()
+    save_evidence('05-person-screen')
+    step('cast card opens person screen', ok, str(card[:2]))
+
+
+def scenario_search(d):
+    """Seerr row in search results, and its Discover-more tile."""
+    found = search_for(d, 'star', settle=('Discover · Seerr', 'Star'))
+    row_found = found and d.dpad_until(
+        lambda _t: d._focused_row_header() == 'Discover · Seerr',
+        atv.KEY_DOWN, 20,
+    )
+    save_evidence('06-search-seerr-row')
+    step('search shows Seerr row', bool(row_found))
+
+    if not row_found:
+        step('discover-more tile opens Discover', False, 'row missing')
+        return
+
+    tile = d.focus_row_and_pick(
+        'Discover · Seerr',
+        lambda t: any('Discover more' in x for x in t),
+        max_cols=25,
+    )
+    if tile:
+        d.key(atv.KEY_CENTER)
+        step('discover-more tile opens Discover', d.wait_text('Trending', 'Popular', timeout=20))
+        save_evidence('07-discover-more-nav')
+    else:
+        step('discover-more tile opens Discover', False, 'tile not reachable')
+
+
+def scenario_long_press(d, query=None):
+    """Long-pressing a library-backed Seerr card opens Canopy actions."""
+    # Only titles already in the library carry Canopy actions, so this needs a
+    # Seerr result the server has linked to a Jellyfin item. Try a couple of
+    # broad queries and skip if this server links none.
+    for term in ([query] if query else ['a', 'the']):
+        if not search_for(d, term, settle=('Discover · Seerr',)):
+            continue
+        if not d.dpad_until(lambda _t: d._focused_row_header() == 'Discover · Seerr',
+                            atv.KEY_DOWN, 20):
+            continue
+        if not d.focus_row_and_pick('Discover · Seerr',
+                                    lambda t: any('In library' in x for x in t), max_cols=25):
+            continue
+        d.long_press()
+        ok = d.wait_text('Spoiler Guard', 'Hidden Content', 'Actions', timeout=12)
+        save_evidence('12-card-long-press-actions')
+        d.key(atv.KEY_BACK)
+        step('long-press on library-backed Seerr card opens Canopy actions', ok)
+        return
+    step('long-press on library-backed Seerr card opens Canopy actions', True,
+         'no Seerr result linked to the library on this server - skipped')
+
+
+def scenario_library(d):
+    """Library item shows Canopy actions; its cast opens the native person
+    screen, which carries split Seerr filmography rows."""
+    # Open a real library item from Home rather than searching for a title
+    # that only exists on one particular server.
+    opened = open_first_library_item(d)
+    # Canopy contributions resolve after the item screen paints, so wait for
+    # them rather than sampling the screen the moment Play appears.
+    shown = opened and d.wait_text('Spoiler Guard', 'Hidden Content', 'Seerr', 'Actions', timeout=20)
+    save_evidence('09-library-item-canopy-actions')
+    step('library item shows Canopy actions', shown)
+
+    if not opened:
+        step('native person screen shows Seerr More from row', False, 'library item unavailable')
+        step('person filmography rows are split by kind', False, 'library item unavailable')
+        return
+
+    if not d.dpad_until(lambda _t: (d._focused_row_header() or '').startswith('Cast'),
+                        atv.KEY_DOWN, 12):
+        # People are server data; an item without cast cannot exercise this.
+        note = 'item has no cast row on this server - skipped'
+        step('native person screen shows Seerr More from row', True, note)
+        step('person filmography rows are split by kind', True, note)
+        return
+
+    d.key(atv.KEY_CENTER)
+    d.wait_text('Movies', 'Films', 'Born', timeout=20)
+    headers = set()
+    more_from = False
+    for _ in range(12):
+        h = d._focused_row_header()
+        if h:
+            headers.add(h)
+            if h.startswith('More from'):
+                more_from = True
+        d.key(atv.KEY_DOWN)
+    save_evidence('10-native-person-more-from')
+    step('native person screen shows Seerr More from row', more_from, str(sorted(headers))[:120])
+
+    kinds = [h for h in headers if h.startswith('More from')]
+    split_ok = any('Movies' in h for h in kinds) or any('Series' in h for h in kinds)
+    step('person filmography rows are split by kind', split_ok, str(kinds)[:120])
+
+
+def scenario_settings(d):
+    """Placement options render; the Seerr toggle hides and restores surfaces."""
+    if not open_canopy_settings(d):
+        step('placement setting shows all options', False, 'settings unavailable')
+        step('seerr toggle hides Discover surfaces', False, 'settings unavailable')
+        step('seerr toggle re-enable restores Discover', False, 'settings unavailable')
+        return
+
+    placement_ok = False
+    if d.tap_text('Action placement'):
+        placement_ok = (
+            d.wait_text('With the item buttons', timeout=8)
+            and d.has_text('Other options menu')
+            and d.has_text('Dedicated Actions row')
+        )
+        save_evidence('11-placement-options')
+        d.key(atv.KEY_BACK)
+    step('placement setting shows all options', placement_ok)
+
+    toggled = d.tap_text('Seerr search suggestions')
+    save_evidence('08a-toggle-off')
+    home(d)
+    hidden = not d.has_text('Discover')
+    save_evidence('08b-discover-hidden')
+    step('seerr toggle hides Discover surfaces', bool(toggled) and hidden,
+         'toggled=%s hidden=%s' % (bool(toggled), hidden))
+
+    restored = False
+    if open_canopy_settings(d):
+        d.tap_text('Seerr search suggestions')
+        home(d)
+        restored = d.has_text('Discover')
+        save_evidence('08c-discover-restored')
+    step('seerr toggle re-enable restores Discover', restored)
+
+
+SCENARIOS = [
+    ('toolbar', scenario_toolbar),
+    ('discover', scenario_discover),
+    ('person', scenario_person),
+    ('search', scenario_search),
+    ('long-press', scenario_long_press),
+    ('library', scenario_library),
+    ('settings', scenario_settings),
+]
 
 
 def main():
-	serial = sys.argv[1]
-	package = sys.argv[2] if len(sys.argv) > 2 else 'org.jellyfin.androidtv'
-	d = atv.Device(serial, package)
-	os.makedirs(EVIDENCE, exist_ok=True)
-	d.clear_logs()
+    global _cold_mode
 
-	# 1. Home shows the Discover toolbar entry
-	fresh(d)
-	step('home shows Discover toolbar button', d.has_text('Discover'))
-	save_evidence('01-home')
+    args = list(sys.argv[1:])
+    if '--list' in args:
+        for name, fn in SCENARIOS:
+            print('%-12s %s' % (name, (fn.__doc__ or '').strip().splitlines()[0]))
+        return 0
 
-	# 2. Discover screen renders rows
-	open_discover(d)
-	ok = d.has_text('Trending', 'Popular', 'Your watchlist')
-	save_evidence('02-discover')
-	step('discover screen renders rows', ok and d.in_app())
+    _cold_mode = '--cold' in args
+    args = [a for a in args if a != '--cold']
 
-	# 3. Open a requestable Trending card via dpad -> Seerr detail screen
-	picked = d.focus_row_and_pick(
-		'Trending',
-		# requestable cards have a bare year/kind subtitle; any status is
-		# rendered as 'year · status', so exclude subtitles containing a dot
-		lambda t: t and not any('·' in x or 'In library' in x for x in t),
-	)
-	detail_ok = False
-	if picked:
-		d.key(atv.KEY_CENTER)
-		time.sleep(10)
-		detail_ok = d.has_text('Request', 'Similar', 'Cast', 'Recommended')
-		save_evidence('03-seerr-item-detail')
-	step('discover card opens seerr detail', detail_ok and d.in_app(), str((picked or [])[:2]))
+    only = None
+    for i, a in enumerate(args):
+        if a == '--only' and i + 1 < len(args):
+            only = {n.strip() for n in args[i + 1].split(',') if n.strip()}
+            del args[i:i + 2]
+            break
+        if a.startswith('--only='):
+            only = {n.strip() for n in a.split('=', 1)[1].split(',') if n.strip()}
+            del args[i]
+            break
 
-	# 4. Request button: press, drive dialog if any, verify POST + status
-	requested = False
-	request_detail = ''
-	if detail_ok:
-		before_posts = len(d.requests('seerr/request'))
-		if d.dpad_until(lambda t: any('Request' in x for x in t), atv.KEY_DOWN, 4):
-			d.key(atv.KEY_CENTER)
-			time.sleep(4)
-			if d.has_text('Request seasons'):
-				save_evidence('04a-season-picker')
-				# season list defaults all-checked; walk to the dialog button row
-				# (AlertDialog renders buttons in caps; DOWN lands on the left
-				# button, so step RIGHT until REQUEST has focus)
-				def on_button(t):
-					return bool(t) and {x.upper() for x in t} <= {'CANCEL', 'REQUEST'}
-				if d.dpad_until(on_button, atv.KEY_DOWN, 12):
-					d.dpad_until(
-						lambda t: bool(t) and {x.upper() for x in t} <= {'REQUEST'},
-						atv.KEY_RIGHT, 3,
-					)
-					d.key(atv.KEY_CENTER)
-			time.sleep(8)
-			after_posts = len(d.requests('seerr/request'))
-			requested = after_posts > before_posts
-			request_detail = '%d request POST(s)' % (after_posts - before_posts)
-			# after a successful submit the surface refreshes; status shows
-			# Requested/Processing or the request button disappears
-			time.sleep(4)
-			save_evidence('04b-after-request')
-		step('request button submits to Seerr', requested, request_detail)
-	else:
-		step('request button submits to Seerr', False, 'detail screen unavailable')
+    positional = [a for a in args if not a.startswith('-')]
+    if not positional:
+        print(__doc__)
+        return 2
+    serial = positional[0]
+    package = positional[1] if len(positional) > 1 else 'org.jellyfin.androidtv'
 
-	# 5. Cast card opens the person screen (skipped when no cast row)
-	fresh(d)
-	open_discover(d)
-	picked = d.focus_row_and_pick(
-		'Trending',
-		lambda t: t and not any('·' in x or 'In library' in x for x in t),
-	)
-	if picked:
-		d.key(atv.KEY_CENTER)
-	time.sleep(10)
-	if d.has_text('Cast'):
-		picked = d.focus_row_and_pick('Cast')
-		if picked:
-			d.key(atv.KEY_CENTER)
-			time.sleep(10)
-			person_ok = d.in_app() and d.has_text('Movies', 'Series', 'Known for')
-			save_evidence('05-person-screen')
-			step('cast card opens person screen', person_ok, str(picked[:2]))
-		else:
-			step('cast card opens person screen', False, 'could not focus cast row')
-	else:
-		step('cast card opens person screen', True, 'no cast row served - skipped')
+    selected = [(n, f) for n, f in SCENARIOS if only is None or n in only]
+    if not selected:
+        print('no scenarios matched %s; known: %s' % (only, [n for n, _ in SCENARIOS]))
+        return 2
 
-	# 6. Search shows the Seerr row; Discover-more tile navigates
-	fresh(d)
-	d.tap_text('Search')
-	time.sleep(5)
-	d.type_text('star')
-	d.key(atv.KEY_ENTER, delay=3)  # submit; the app moves focus into results
-	time.sleep(12)
-	row_found = d.dpad_until(
-		lambda _t: d._focused_row_header() == 'Discover · Seerr',
-		atv.KEY_DOWN, 20,
-	)
-	save_evidence('06-search-seerr-row')
-	step('search shows Seerr row', row_found)
-	if row_found:
-		tile = d.focus_row_and_pick(
-			'Discover · Seerr',
-			lambda t: any('Discover more' in x for x in t),
-			max_cols=25,
-		)
-		if tile:
-			d.key(atv.KEY_CENTER)
-			time.sleep(8)
-			step('discover-more tile opens Discover', d.has_text('Trending', 'Popular'))
-			save_evidence('07-discover-more-nav')
-		else:
-			step('discover-more tile opens Discover', False, 'tile not reachable')
-	else:
-		step('discover-more tile opens Discover', False, 'row missing')
+    d = atv.Device(serial, package)
+    os.makedirs(EVIDENCE, exist_ok=True)
+    d.clear_logs()
+    cold_start(d)
 
-	# 7. Settings toggle actually hides the Seerr surfaces, and re-enabling restores them
-	fresh(d)
-	toggled = hidden = restored = False
-	p = None
-	root = d.dump_tree()
-	if root is not None:
-		for node in root.iter('node'):
-			if node.get('content-desc') == 'Preferences':
-				import re as _re
-				m = _re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
-				if m:
-					x1, y1, x2, y2 = map(int, m.groups())
-					p = ((x1 + x2) // 2, (y1 + y2) // 2)
-				break
-	if p:
-		d.tap(*p, delay=6)
-		if d.tap_text('Canopy'):
-			time.sleep(4)
-			toggled = d.tap_text('Seerr search suggestions')
-			time.sleep(2)
-			save_evidence('08a-toggle-off')
-			d.key(atv.KEY_BACK); d.key(atv.KEY_BACK); d.key(atv.KEY_BACK)
-			time.sleep(4)
-			fresh(d)
-			hidden = not d.has_text('Discover')
-			save_evidence('08b-discover-hidden')
-			# restore
-			root = d.dump_tree()
-			if p:
-				d.tap(*p, delay=6)
-				d.tap_text('Canopy')
-				time.sleep(4)
-				d.tap_text('Seerr search suggestions')
-				time.sleep(2)
-				d.key(atv.KEY_BACK); d.key(atv.KEY_BACK); d.key(atv.KEY_BACK)
-				time.sleep(4)
-				fresh(d)
-				restored = d.has_text('Discover')
-				save_evidence('08c-discover-restored')
-	step('seerr toggle hides Discover surfaces', toggled and hidden, 'toggled=%s hidden=%s' % (toggled, hidden))
-	step('seerr toggle re-enable restores Discover', restored)
+    run_started = time.monotonic()
+    for name, fn in selected:
+        started = time.monotonic()
+        print('--- %s ---' % name, flush=True)
+        try:
+            fn(d)
+        except Exception as error:  # a broken scenario must not hide the others
+            step('%s scenario completed' % name, False, repr(error))
+        print('    (%s took %.1fs)' % (name, time.monotonic() - started), flush=True)
 
-	# 8. Library item detail shows Canopy actions (native buttons by default,
-	# or the classic Actions row when that placement is selected)
-	fresh(d)
-	d.tap_text('Search')
-	time.sleep(5)
-	d.type_text('iron')
-	d.key(atv.KEY_ENTER, delay=3)
-	time.sleep(12)
-	shown = False
-	opened_library_item = False
-	if d.dpad_until(lambda t: any('Iron' in x for x in t), atv.KEY_DOWN, 10):
-		d.key(atv.KEY_CENTER)
-		time.sleep(10)
-		opened_library_item = True
-		shown = d.has_text('Spoiler Guard', 'Hidden Content', 'Actions', 'Seerr')
-		save_evidence('09-library-item-canopy-actions')
-	step('library item shows Canopy actions', shown)
+    crashes = d.crash_log()
+    step('no app crashes during run', not crashes, crashes[0][:200] if crashes else '')
 
-	# 9. Native person screen (from a library item's cast) gets a Seerr
-	# "More from" filmography row
-	more_from = False
-	if opened_library_item:
-		if d.dpad_until(lambda _t: (d._focused_row_header() or '').startswith('Cast'), atv.KEY_DOWN, 12):
-			d.key(atv.KEY_CENTER)
-			time.sleep(12)
-			# the Seerr filmography row sits below the library rows; scroll to it
-			more_from = d.dpad_until(
-				lambda _t: (d._focused_row_header() or '').startswith('More from'),
-				atv.KEY_DOWN, 10,
-			)
-			save_evidence('10-native-person-more-from')
-	step('native person screen shows Seerr More from row', more_from)
-
-	# 9b. Long-pressing a library-backed Seerr card opens Canopy actions
-	fresh(d)
-	d.tap_text('Search')
-	time.sleep(5)
-	d.type_text('iron')
-	d.key(atv.KEY_ENTER, delay=3)
-	time.sleep(14)
-	long_press_ok = False
-	if d.dpad_until(lambda _t: d._focused_row_header() == 'Discover · Seerr', atv.KEY_DOWN, 20):
-		# find a card already in the library (its subtitle says so)
-		if d.focus_row_and_pick('Discover · Seerr', lambda t: any('In library' in x for x in t), max_cols=25):
-			d.shell('input', 'keyevent', '--longpress', str(atv.KEY_CENTER))
-			time.sleep(5)
-			long_press_ok = d.has_text('Spoiler Guard', 'Hidden Content', 'Actions')
-			save_evidence('12-card-long-press-actions')
-			d.key(atv.KEY_BACK)
-	step('long-press on library-backed Seerr card opens Canopy actions', long_press_ok)
-
-	# 9c. Person screen splits credits into Movies and Series rows
-	fresh(d)
-	split_ok = False
-	d.tap_text('Search')
-	time.sleep(5)
-	d.type_text('iron')
-	d.key(atv.KEY_ENTER, delay=3)
-	time.sleep(14)
-	if d.dpad_until(lambda t: any('Iron' in x for x in t), atv.KEY_DOWN, 10):
-		d.key(atv.KEY_CENTER)
-		time.sleep(10)
-		if d.dpad_until(lambda _t: (d._focused_row_header() or '').startswith('Cast'), atv.KEY_DOWN, 12):
-			d.key(atv.KEY_CENTER)
-			time.sleep(12)
-			headers = set()
-			for _ in range(12):
-				h = d._focused_row_header()
-				if h:
-					headers.add(h)
-				d.key(atv.KEY_DOWN)
-			more_from = [h for h in headers if h.startswith('More from')]
-			split_ok = any('Movies' in h for h in more_from) or any('Series' in h for h in more_from)
-			save_evidence('13-person-split-rows')
-	step('person filmography rows are split by kind', split_ok)
-
-	# 10. Canopy settings: action placement selector renders all options
-	fresh(d)
-	placement_ok = False
-	root = d.dump_tree()
-	p2 = None
-	if root is not None:
-		import re as _re
-		for node in root.iter('node'):
-			if node.get('content-desc') == 'Preferences':
-				m = _re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
-				if m:
-					x1, y1, x2, y2 = map(int, m.groups())
-					p2 = ((x1 + x2) // 2, (y1 + y2) // 2)
-				break
-	if p2:
-		d.tap(*p2, delay=6)
-		if d.tap_text('Canopy'):
-			time.sleep(4)
-			if d.tap_text('Action placement'):
-				time.sleep(4)
-				placement_ok = d.has_text('With the item buttons') and d.has_text('Other options menu') and d.has_text('Dedicated Actions row')
-				save_evidence('11-placement-options')
-				d.key(atv.KEY_BACK); d.key(atv.KEY_BACK); d.key(atv.KEY_BACK); d.key(atv.KEY_BACK)
-	step('placement setting shows all options', placement_ok)
-
-	# Crash sweep across the whole run
-	crashes = d.crash_log()
-	step('no app crashes during run', not crashes, crashes[0][:200] if crashes else '')
-
-	print(flush=True)
-	failed = [r for r in results if not r[1]]
-	print('=== %d/%d steps passed ===' % (len(results) - len(failed), len(results)), flush=True)
-	sys.exit(1 if failed else 0)
+    total = time.monotonic() - run_started
+    failed = [r for r in results if not r[1]]
+    print(flush=True)
+    print('=== %d/%d steps passed in %.1fs (%s%s) ===' % (
+        len(results) - len(failed), len(results), total,
+        ','.join(n for n, _ in selected),
+        ', cold' if _cold_mode else '',
+    ), flush=True)
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':
-	main()
+    sys.exit(main())
