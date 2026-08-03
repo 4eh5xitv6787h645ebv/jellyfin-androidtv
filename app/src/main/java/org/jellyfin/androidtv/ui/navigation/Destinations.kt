@@ -23,6 +23,10 @@ import org.jellyfin.androidtv.ui.playback.stillwatching.StillWatchingFragment
 import org.jellyfin.androidtv.ui.player.photo.PhotoPlayerFragment
 import org.jellyfin.androidtv.ui.player.video.VideoPlayerFragment
 import org.jellyfin.androidtv.ui.search.SearchFragment
+import org.jellyfin.androidtv.ui.seerr.SeerrDiscoverFragment
+import org.jellyfin.androidtv.ui.seerr.SeerrGenreGridFragment
+import org.jellyfin.androidtv.ui.seerr.SeerrItemFragment
+import org.jellyfin.androidtv.ui.seerr.SeerrPersonFragment
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.SeriesTimerInfoDto
@@ -35,6 +39,24 @@ object Destinations {
 	val home = fragmentDestination<HomeFragment>()
 	fun search(query: String? = null) = fragmentDestination<SearchFragment> {
 		putString(SearchFragment.EXTRA_QUERY, query)
+	}
+
+	// Canopy Seerr integration
+	val seerrDiscover = fragmentDestination<SeerrDiscoverFragment>()
+
+	fun seerrItem(tmdbId: Long, mediaType: String) = fragmentDestination<SeerrItemFragment> {
+		putLong(SeerrItemFragment.ARG_TMDB_ID, tmdbId)
+		putString(SeerrItemFragment.ARG_MEDIA_TYPE, mediaType)
+	}
+
+	fun seerrPerson(personId: Long) = fragmentDestination<SeerrPersonFragment> {
+		putLong(SeerrPersonFragment.ARG_PERSON_ID, personId)
+	}
+
+	fun seerrGenre(genreId: Long, mediaType: String, name: String) = fragmentDestination<SeerrGenreGridFragment> {
+		putLong(SeerrGenreGridFragment.ARG_GENRE_ID, genreId)
+		putString(SeerrGenreGridFragment.ARG_MEDIA_TYPE, mediaType)
+		putString(SeerrGenreGridFragment.ARG_GENRE_NAME, name)
 	}
 
 	// Browsing

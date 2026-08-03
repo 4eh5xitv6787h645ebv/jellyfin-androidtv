@@ -10,12 +10,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrBrowseMoreItem
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrEntry
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
+import org.jellyfin.androidtv.preference.UserPreferences
 import org.jellyfin.sdk.model.api.BaseItemKind
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
-class SearchViewModel(
-	private val searchRepository: SearchRepository
+internal class SearchViewModel(
+	private val searchRepository: SearchRepository,
+	private val seerrRepository: SeerrRepository,
+	private val userPreferences: UserPreferences,
 ) : ViewModel() {
 	companion object {
 		private val debounceDuration = 600.milliseconds
@@ -45,6 +51,9 @@ class SearchViewModel(
 	private val _searchResultsFlow = MutableStateFlow<Collection<SearchResultGroup>>(emptyList())
 	val searchResultsFlow = _searchResultsFlow.asStateFlow()
 
+	private val _seerrResultsFlow = MutableStateFlow<List<SeerrEntry>>(emptyList())
+	val seerrResultsFlow = _seerrResultsFlow.asStateFlow()
+
 	fun searchImmediately(query: String) = searchDebounced(query, 0.milliseconds)
 
 	fun searchDebounced(query: String, debounce: Duration = debounceDuration): Boolean {
@@ -56,11 +65,14 @@ class SearchViewModel(
 
 		if (trimmed.isBlank()) {
 			_searchResultsFlow.value = emptyList()
+			_seerrResultsFlow.value = emptyList()
 			return true
 		}
 
 		searchJob = viewModelScope.launch {
 			delay(debounce)
+
+			val seerrResults = async { searchSeerr(trimmed) }
 
 			_searchResultsFlow.value = groups.map { (stringRes, itemKinds) ->
 				async {
@@ -70,8 +82,26 @@ class SearchViewModel(
 					SearchResultGroup(stringRes, items)
 				}
 			}.awaitAll()
+
+			_seerrResultsFlow.value = seerrResults.await()
 		}
 
 		return true
+	}
+
+	/**
+	 * Searches the Canopy Seerr proxy when the user preference is enabled and
+	 * Seerr is configured, reachable and linked for the current user. Any
+	 * other state degrades to an empty result, which hides the row entirely.
+	 * Non-empty results get a trailing tile linking to the Discover screen.
+	 */
+	private suspend fun searchSeerr(query: String): List<SeerrEntry> {
+		if (!userPreferences[UserPreferences.canopySeerrSearchEnabled]) return emptyList()
+		if (!seerrRepository.capabilities().available) return emptyList()
+
+		val results = seerrRepository.search(query)
+		if (results.isEmpty()) return emptyList()
+
+		return results + SeerrBrowseMoreItem
 	}
 }

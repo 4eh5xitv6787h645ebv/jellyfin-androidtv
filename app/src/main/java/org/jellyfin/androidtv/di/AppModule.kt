@@ -28,6 +28,8 @@ import org.jellyfin.androidtv.data.repository.UserViewsRepository
 import org.jellyfin.androidtv.data.repository.UserViewsRepositoryImpl
 import org.jellyfin.androidtv.data.service.BackgroundService
 import org.jellyfin.androidtv.integration.canopy.CanopyRequestRegistry
+import org.jellyfin.androidtv.integration.canopy.CanopyImageCache
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.integration.canopy.CanopyResponseBoundingInterceptor
 import org.jellyfin.androidtv.integration.dream.DreamViewModel
 import org.jellyfin.androidtv.ui.InteractionTrackerViewModel
@@ -161,6 +163,8 @@ val appModule = module {
 	single<CustomMessageRepository> { CustomMessageRepositoryImpl() }
 	single<NavigationRepository> { NavigationRepositoryImpl(Destinations.home) }
 	single<SearchRepository> { SearchRepositoryImpl(get()) }
+	single { SeerrRepository(get()) }
+	single { CanopyImageCache(get()) }
 	single<MediaSegmentRepository> { MediaSegmentRepositoryImpl(get(), get()) }
 	single<ExternalAppRepository> { ExternalAppRepository(get(), getAll(), get<DefaultExternalPlayerApi>()) }
 
@@ -177,7 +181,7 @@ val appModule = module {
 	viewModel { NextUpViewModel(get(), get(), get()) }
 	viewModel { StillWatchingViewModel(get(), get(), get(), get()) }
 	viewModel { PhotoPlayerViewModel(get()) }
-	viewModel { SearchViewModel(get()) }
+	viewModel { SearchViewModel(get(), get(), get()) }
 	viewModel { DreamViewModel(get(), get(), get(), get(), get()) }
 	viewModel { SettingsViewModel() }
 	viewModel { SettingsLibrariesScreenViewModel(get()) }
@@ -190,5 +194,5 @@ val appModule = module {
 	single { ReportingHelper(get(), get()) }
 	single<PlaybackHelper> { SdkPlaybackHelper(get(), get(), get(), get()) }
 
-	factory { (context: Context) -> SearchFragmentDelegate(context, get(), get()) }
+	factory { (context: Context) -> SearchFragmentDelegate(context, get(), get(), get()) }
 }

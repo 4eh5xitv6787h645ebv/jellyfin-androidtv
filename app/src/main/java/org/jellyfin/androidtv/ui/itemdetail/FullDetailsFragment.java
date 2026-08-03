@@ -67,6 +67,8 @@ import org.jellyfin.androidtv.ui.presentation.CustomListRowPresenter;
 import org.jellyfin.androidtv.ui.presentation.InfoCardPresenter;
 import org.jellyfin.androidtv.ui.presentation.MutableObjectAdapter;
 import org.jellyfin.androidtv.ui.presentation.MyDetailsOverviewRowPresenter;
+import org.jellyfin.androidtv.ui.seerr.SeerrClickBridge;
+import org.jellyfin.androidtv.ui.seerr.SeerrPersonExtrasKt;
 import org.jellyfin.androidtv.util.CoroutineUtils;
 import org.jellyfin.androidtv.util.DateTimeExtensionsKt;
 import org.jellyfin.androidtv.util.ImageHelper;
@@ -133,6 +135,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     private MyDetailsOverviewRow mDetailsOverviewRow;
     private CustomListRowPresenter mListRowPresenter;
     private CanopyItemDetailController mCanopyController;
+    private final List<TextUnderButton> mCanopyActionButtons = new ArrayList<>();
+    private List<CanopyMenuAction> mCanopyMenuActions = new ArrayList<>();
     private ListRow mCanopyActionRow;
 
     private Handler mLoopHandler = new Handler();
@@ -172,7 +176,9 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
         mRowsFragment.setOnItemViewSelectedListener(new ItemViewSelectedListener());
 
         mDorPresenter = new MyDetailsOverviewRowPresenter(markdownRenderer.getValue());
-        mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue());
+        if (userPreferences.getValue().get(UserPreferences.Companion.getCanopyItemActionsEnabled())) {
+            mCanopyController = new CanopyItemDetailController(this, api.getValue(), dataRefreshService.getValue(), userPreferences.getValue());
+        }
 
         mItemId = Utils.uuidOrNull(getArguments().getString("ItemId"));
         mChannelId = Utils.uuidOrNull(getArguments().getString("ChannelId"));
@@ -489,9 +495,68 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
             updateInfo(detailsOverviewRow.getItem());
             addAdditionalRows(mRowsAdapter);
-            mCanopyController.bind(detailsOverviewRow.getItem().getId());
+            if (mCanopyController != null) mCanopyController.bind(detailsOverviewRow.getItem().getId());
 
         }
+    }
+
+    /**
+     * Places Canopy actions as native detail buttons, inserted before the
+     * "Other options" button. The row is rebound in place so it is never
+     * detached while focused.
+     */
+    void setCanopyActionButtons(@NonNull List<TextUnderButton> buttons) {
+        if (mDetailsOverviewRow == null) return;
+        MyDetailsOverviewRowPresenter.ViewHolder holder = mDorPresenter.getViewHolder();
+
+        // Mutate the row in place. Rebinding the whole row would clear and
+        // re-add every button, which visibly flashes the action row and moves
+        // buttons the user may already be focused on.
+        for (TextUnderButton button : mCanopyActionButtons) {
+            mDetailsOverviewRow.removeAction(button);
+            if (holder != null) holder.removeActionView(button);
+        }
+        mCanopyActionButtons.clear();
+
+        int index = moreButton != null ? mDetailsOverviewRow.indexOfAction(moreButton) : -1;
+        if (index < 0) index = mDetailsOverviewRow.getActions().size();
+        int viewIndex = -1;
+        if (holder != null && moreButton != null) viewIndex = holder.indexOfActionView(moreButton);
+
+        for (TextUnderButton button : buttons) {
+            mDetailsOverviewRow.addAction(index++, button);
+            mCanopyActionButtons.add(button);
+            if (holder != null) {
+                if (viewIndex < 0) {
+                    // No More button yet: append so nothing already placed moves.
+                    holder.addActionView(button, Integer.MAX_VALUE);
+                } else {
+                    holder.addActionView(button, viewIndex++);
+                }
+            }
+        }
+    }
+
+    /**
+     * Places Canopy actions inside the "Other options" popup menu, forcing the
+     * button visible when entries exist even if no native action collapsed.
+     */
+    void setCanopyMenuActions(@NonNull List<CanopyMenuAction> actions) {
+        boolean hadActions = !mCanopyMenuActions.isEmpty();
+        mCanopyMenuActions = actions;
+        if (moreButton == null || mDetailsOverviewRow == null) return;
+        if (!actions.isEmpty() && moreButton.getVisibility() != View.VISIBLE) {
+            moreButton.setVisibility(View.VISIBLE);
+            if (mDorPresenter.getViewHolder() != null) mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
+        } else if (actions.isEmpty() && hadActions && collapsedOptions == 0 && moreButton.getVisibility() == View.VISIBLE) {
+            moreButton.setVisibility(View.GONE);
+            if (mDorPresenter.getViewHolder() != null) mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
+        }
+    }
+
+    @NonNull
+    List<CanopyMenuAction> getCanopyMenuActions() {
+        return mCanopyMenuActions;
     }
 
     void setCanopyActionRow(@Nullable ListRow row) {
@@ -603,6 +668,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
                 ItemRowAdapter personEpisodesAdapter = new ItemRowAdapter(requireContext(), BrowsingUtils.createPersonItemsRequest(mBaseItem.getId(), BaseItemKind.EPISODE), 100, false, new CardPresenter(), adapter);
                 addItemRow(adapter, personEpisodesAdapter, 2, getString(R.string.lbl_episodes));
+
+                SeerrPersonExtrasKt.addSeerrPersonCreditsRow(this, adapter, mBaseItem);
 
                 break;
             case MUSIC_ARTIST:
@@ -1213,6 +1280,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
                                   RowPresenter.ViewHolder rowViewHolder, Row row) {
 
             if (mCanopyController != null && mCanopyController.handleClick(item)) return;
+            if (SeerrClickBridge.handle(navigationRepository.getValue(), item)) return;
             if (!(item instanceof BaseRowItem)) return;
             itemLauncher.getValue().launch((BaseRowItem) item, (ItemRowAdapter) ((ListRow) row).getAdapter(), requireContext());
         }

@@ -37,6 +37,11 @@ import org.jellyfin.androidtv.ui.base.button.IconButtonDefaults
 import org.jellyfin.androidtv.ui.navigation.ActivityDestinations
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
+import org.jellyfin.androidtv.preference.UserPreferences
+import org.jellyfin.androidtv.ui.settings.compat.observePreference
 import org.jellyfin.androidtv.ui.playback.MediaManager
 import org.jellyfin.androidtv.ui.settings.compat.SettingsViewModel
 import org.jellyfin.androidtv.util.apiclient.getUrl
@@ -48,6 +53,7 @@ import org.koin.compose.viewmodel.koinActivityViewModel
 enum class MainToolbarActiveButton {
 	User,
 	Home,
+	Discover,
 	Search,
 
 	None,
@@ -142,6 +148,27 @@ private fun MainToolbar(
 						colors = if (activeButton == MainToolbarActiveButton.Home) activeButtonColors else ButtonDefaults.colors(),
 						content = { Text(stringResource(R.string.lbl_home)) }
 					)
+					// Only surface Discover when Seerr is actually reachable and
+					// linked for this user (graceful omission), and the user has
+					// not disabled the Seerr surfaces.
+					val userPreferences = koinInject<UserPreferences>()
+					val seerrRepository = koinInject<SeerrRepository>()
+					val seerrEnabled by observePreference(userPreferences, UserPreferences.canopySeerrSearchEnabled)
+					val seerrAvailable by seerrRepository.availability.collectAsState()
+					LaunchedEffect(seerrEnabled) {
+						if (seerrEnabled) seerrRepository.capabilities()
+					}
+					if (seerrEnabled && seerrAvailable == true) {
+						Button(
+							onClick = {
+								if (activeButton != MainToolbarActiveButton.Discover) {
+									navigationRepository.navigate(Destinations.seerrDiscover)
+								}
+							},
+							colors = if (activeButton == MainToolbarActiveButton.Discover) activeButtonColors else ButtonDefaults.colors(),
+							content = { Text(stringResource(R.string.canopy_seerr_discover)) }
+						)
+					}
 					Button(
 						onClick = {
 							if (activeButton != MainToolbarActiveButton.Search) {

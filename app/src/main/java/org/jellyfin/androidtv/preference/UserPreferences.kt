@@ -1,10 +1,12 @@
 package org.jellyfin.androidtv.preference
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.preference.PreferenceManager
 import org.jellyfin.androidtv.preference.UserPreferences.Companion.screensaverInAppEnabled
 import org.jellyfin.androidtv.preference.constant.AVCLevel
 import org.jellyfin.androidtv.preference.constant.AppTheme
+import org.jellyfin.androidtv.preference.constant.CanopyActionsPlacement
 import org.jellyfin.androidtv.preference.constant.AudioBehavior
 import org.jellyfin.androidtv.preference.constant.BackdropBehavior
 import org.jellyfin.androidtv.preference.constant.BufferLength
@@ -259,6 +261,46 @@ class UserPreferences(context: Context) : SharedPreferenceStore(
 		 * Enable the use of software-based codecs.
 		 */
 		var softwareCodecsEnabled = booleanPreference("software_codecs_enabled", true)
+
+		/**
+		 * Show Canopy actions and statuses on the item details screen.
+		 */
+		var canopyItemActionsEnabled = booleanPreference("canopy_item_actions_enabled", true)
+
+		/**
+		 * Where Canopy actions appear on the item details screen.
+		 */
+		var canopyActionsPlacement = enumPreference("canopy_actions_placement", CanopyActionsPlacement.BUTTONS)
+
+		/**
+		 * Show Seerr request suggestions in search results.
+		 */
+		var canopySeerrSearchEnabled = booleanPreference("canopy_seerr_search_enabled", true)
+	}
+
+	/**
+	 * Notified when any preference in this store changes, including writes made
+	 * by other screens. Compose consumers use
+	 * [org.jellyfin.androidtv.ui.settings.compat.observePreference].
+	 */
+	fun interface OnChangeListener {
+		fun onPreferenceChanged(key: String)
+	}
+
+	// SharedPreferences keeps only weak references to its listeners, so the
+	// adapters must be held here for as long as the caller is subscribed.
+	private val changeListeners = mutableMapOf<OnChangeListener, SharedPreferences.OnSharedPreferenceChangeListener>()
+
+	fun addOnChangeListener(listener: OnChangeListener) {
+		val adapter = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+			if (key != null) listener.onPreferenceChanged(key)
+		}
+		changeListeners[listener] = adapter
+		sharedPreferences.registerOnSharedPreferenceChangeListener(adapter)
+	}
+
+	fun removeOnChangeListener(listener: OnChangeListener) {
+		changeListeners.remove(listener)?.let(sharedPreferences::unregisterOnSharedPreferenceChangeListener)
 	}
 
 	init {
