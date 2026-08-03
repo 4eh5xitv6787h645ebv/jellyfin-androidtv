@@ -259,6 +259,16 @@ class UserPreferences(context: Context) : SharedPreferenceStore(
 		 * Enable the use of software-based codecs.
 		 */
 		var softwareCodecsEnabled = booleanPreference("software_codecs_enabled", true)
+
+		/**
+		 * Show Canopy actions and statuses on the item details screen.
+		 */
+		var canopyItemActionsEnabled = booleanPreference("canopy_item_actions_enabled", true)
+
+		/**
+		 * Show Seerr request suggestions in search results.
+		 */
+		var canopySeerrSearchEnabled = booleanPreference("canopy_seerr_search_enabled", true)
 	}
 
 	init {
