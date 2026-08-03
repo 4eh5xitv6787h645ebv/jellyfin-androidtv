@@ -145,7 +145,7 @@ class CanopyClientTests : FunSpec({
 		}
 	}
 
-	test("resolve pins the reviewed seven-contribution boundary") {
+	test("resolve retains bounded headroom for another contribution family") {
 		fun responseWith(count: Int) = CanopyResolveResponseWire(
 			catalogRevision = "catalog-v1-boundary",
 			contributions = List(count) { index ->
@@ -160,7 +160,7 @@ class CanopyClientTests : FunSpec({
 
 		CanopyContractMapper.resolvedSurface(
 			responseWith(CanopyContractBounds.MAX_CONTRIBUTIONS),
-		).contributions.size shouldBe 7
+		).contributions.size shouldBe 12
 		shouldThrow<CanopyContractException> {
 			CanopyContractMapper.resolvedSurface(responseWith(CanopyContractBounds.MAX_CONTRIBUTIONS + 1))
 		}
