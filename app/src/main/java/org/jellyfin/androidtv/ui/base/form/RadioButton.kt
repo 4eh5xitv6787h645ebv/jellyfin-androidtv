@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.ui.base.Icon
@@ -28,6 +30,8 @@ fun RadioButton(
 ) {
 	Box(
 		modifier = modifier
+			// Announce selection state; without it the control is decorative.
+			.semantics { selected = checked }
 			.defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
 			.background(if (checked) containerColor else Color.Unspecified, shape)
 			.border(if (checked) 0.dp else 2.dp, containerColor, shape),

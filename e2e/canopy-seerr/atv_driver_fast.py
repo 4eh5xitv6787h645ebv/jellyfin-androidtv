@@ -382,6 +382,36 @@ class Device:
         self.tap(p[0], p[1] + dy, delay)
         return True
 
+    def toggle_state(self, label):
+        """Checked state of the control on the row carrying `label`.
+
+        Returns True/False, or None when no state is exposed. Reads the real
+        accessibility state rather than inferring a setting from downstream UI.
+        """
+        root = self.dump_tree()
+        if root is None:
+            return None
+        target = None
+        for node in root.iter('node'):
+            if node.get('text') == label:
+                m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
+                if m:
+                    target = tuple(map(int, m.groups()))
+                break
+        if not target:
+            return None
+        for node in root.iter('node'):
+            if node.get('checkable') != 'true':
+                continue
+            m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.get('bounds', ''))
+            if not m:
+                continue
+            box = tuple(map(int, m.groups()))
+            # same row: vertical spans overlap
+            if box[1] < target[3] and box[3] > target[1]:
+                return node.get('checked') == 'true'
+        return None
+
     def focused_texts(self):
         root = self.dump_tree()
         if root is None:

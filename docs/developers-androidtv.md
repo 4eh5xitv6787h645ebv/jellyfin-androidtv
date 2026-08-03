@@ -206,7 +206,19 @@ sunset date and then fails with no warning.
 a **developer** signal, not a user-facing one: a viewer cannot act on it, so it
 must never reach the UI or repeat per request.
 
-### T11 — Never log a server-controlled response fragment
+### T11 — A control that carries state must announce it
+
+The shared `Checkbox`/`RadioButton` were drawn but not described: no
+`toggleableState`, no `selected`. On a 10-foot UI that means a screen-reader
+user hears the row's label and never learns whether the setting is on — and
+the accessibility tree exposes no state at all, so tests have to infer a
+setting from downstream UI instead of reading it.
+
+Any control representing state gets semantics at the component, not the call
+site, so every screen using it benefits at once. `atv_driver`'s
+`toggle_state()` then reads the real value.
+
+### T12 — Never log a server-controlled response fragment
 
 `SerializationException` messages embed the offending JSON. `Timber.DebugTree`
 is planted in release builds. Log the message, never the throwable, for any
