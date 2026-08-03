@@ -12,6 +12,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.ui.base.Icon
@@ -27,6 +30,10 @@ fun Checkbox(
 ) {
 	Box(
 		modifier = modifier
+			// Without this the control is purely decorative: a screen reader
+			// reads the row's label and never says whether the setting is on,
+			// and the accessibility tree exposes no checked state at all.
+			.semantics { toggleableState = ToggleableState(checked) }
 			.defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
 			.background(if (checked) containerColor else Color.Unspecified, shape)
 			.border(if (checked) 0.dp else 2.dp, containerColor, shape),

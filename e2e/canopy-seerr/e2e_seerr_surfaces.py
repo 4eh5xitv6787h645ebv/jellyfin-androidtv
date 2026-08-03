@@ -402,7 +402,12 @@ def _scenario_settings(d):
         d.key(atv.KEY_BACK)
     step('placement setting shows all options', placement_ok)
 
+    before = d.toggle_state('Seerr search suggestions')
     toggled = d.tap_text('Seerr search suggestions')
+    time.sleep(1.0)
+    after = d.toggle_state('Seerr search suggestions')
+    step('toggle reports its state to accessibility', before is not None and after is not None and before != after,
+         'before=%s after=%s' % (before, after))
     save_evidence('08a-toggle-off')
     home(d)
     hidden = not d.has_text('Discover')
