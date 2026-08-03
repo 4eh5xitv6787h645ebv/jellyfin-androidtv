@@ -28,6 +28,7 @@ import org.jellyfin.androidtv.data.repository.UserViewsRepository
 import org.jellyfin.androidtv.data.repository.UserViewsRepositoryImpl
 import org.jellyfin.androidtv.data.service.BackgroundService
 import org.jellyfin.androidtv.integration.canopy.CanopyRequestRegistry
+import org.jellyfin.androidtv.integration.canopy.CanopyImageCache
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.integration.canopy.CanopyResponseBoundingInterceptor
 import org.jellyfin.androidtv.integration.dream.DreamViewModel
@@ -163,6 +164,7 @@ val appModule = module {
 	single<NavigationRepository> { NavigationRepositoryImpl(Destinations.home) }
 	single<SearchRepository> { SearchRepositoryImpl(get()) }
 	single { SeerrRepository(get()) }
+	single { CanopyImageCache(get()) }
 	single<MediaSegmentRepository> { MediaSegmentRepositoryImpl(get(), get()) }
 	single<ExternalAppRepository> { ExternalAppRepository(get(), getAll(), get<DefaultExternalPlayerApi>()) }
 

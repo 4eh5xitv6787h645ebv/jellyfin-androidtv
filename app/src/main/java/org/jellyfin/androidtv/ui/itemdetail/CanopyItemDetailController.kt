@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.data.model.DataRefreshService
 import org.jellyfin.androidtv.integration.canopy.CanopyActionLayout
+import org.jellyfin.androidtv.integration.canopy.CanopyImageCache
 import org.jellyfin.androidtv.integration.canopy.CanopyClient
 import org.jellyfin.androidtv.integration.canopy.CanopyContribution
 import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailCoordinator
@@ -35,6 +36,7 @@ import org.jellyfin.androidtv.ui.presentation.GridButtonPresenter
 import org.jellyfin.androidtv.util.Utils
 import org.jellyfin.androidtv.util.dp
 import org.jellyfin.sdk.api.client.ApiClient
+import org.koin.java.KoinJavaComponent
 import java.time.Instant
 import java.util.UUID
 
@@ -50,6 +52,9 @@ internal class CanopyItemDetailController(
 		onEvent = ::handleEvent,
 	)
 	private val forms = CanopyFormPresenter(fragment)
+	private val imageCache: CanopyImageCache by lazy {
+		KoinJavaComponent.get(CanopyImageCache::class.java)
+	}
 	private var dialog: AlertDialog? = null
 	private var overflowActions = emptyList<CanopyContribution.Action>()
 
@@ -243,6 +248,10 @@ internal class CanopyItemDetailController(
 		dispatchCanopyRefresh(
 			targets = event.targets,
 			onJellyfinItem = {
+				// Spoiler Guard blurs artwork behind the same image URL and
+				// tag, so cached bitmaps would keep showing the unprotected
+				// image until evicted.
+				fragment.lifecycleScope.launch { imageCache.invalidate() }
 				dataRefreshService.lastLibraryChange = Instant.now()
 				fragment.refreshCanopyItem(event.itemId)
 			},

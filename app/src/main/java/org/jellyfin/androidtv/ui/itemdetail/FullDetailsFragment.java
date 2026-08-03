@@ -507,22 +507,33 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
      */
     void setCanopyActionButtons(@NonNull List<TextUnderButton> buttons) {
         if (mDetailsOverviewRow == null) return;
-        boolean changed = false;
+        MyDetailsOverviewRowPresenter.ViewHolder holder = mDorPresenter.getViewHolder();
+
+        // Mutate the row in place. Rebinding the whole row would clear and
+        // re-add every button, which visibly flashes the action row and moves
+        // buttons the user may already be focused on.
         for (TextUnderButton button : mCanopyActionButtons) {
-            changed |= mDetailsOverviewRow.removeAction(button);
+            mDetailsOverviewRow.removeAction(button);
+            if (holder != null) holder.removeActionView(button);
         }
         mCanopyActionButtons.clear();
-        if (!buttons.isEmpty()) {
-            int index = moreButton != null ? mDetailsOverviewRow.indexOfAction(moreButton) : -1;
-            if (index < 0) index = mDetailsOverviewRow.getActions().size();
-            for (TextUnderButton button : buttons) {
-                mDetailsOverviewRow.addAction(index++, button);
-                mCanopyActionButtons.add(button);
+
+        int index = moreButton != null ? mDetailsOverviewRow.indexOfAction(moreButton) : -1;
+        if (index < 0) index = mDetailsOverviewRow.getActions().size();
+        int viewIndex = -1;
+        if (holder != null && moreButton != null) viewIndex = holder.indexOfActionView(moreButton);
+
+        for (TextUnderButton button : buttons) {
+            mDetailsOverviewRow.addAction(index++, button);
+            mCanopyActionButtons.add(button);
+            if (holder != null) {
+                if (viewIndex < 0) {
+                    // No More button yet: append so nothing already placed moves.
+                    holder.addActionView(button, Integer.MAX_VALUE);
+                } else {
+                    holder.addActionView(button, viewIndex++);
+                }
             }
-            changed = true;
-        }
-        if (changed && mDorPresenter.getViewHolder() != null) {
-            mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
         }
     }
 

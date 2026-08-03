@@ -4,6 +4,7 @@ import android.view.ViewGroup
 import androidx.core.view.isVisible
 import androidx.leanback.widget.RowPresenter
 import org.jellyfin.androidtv.ui.DetailRowView
+import org.jellyfin.androidtv.ui.TextUnderButton
 import org.jellyfin.androidtv.ui.itemdetail.MyDetailsOverviewRow
 import org.jellyfin.androidtv.util.InfoLayoutHelper
 import org.jellyfin.androidtv.util.MarkdownRenderer
@@ -61,6 +62,38 @@ class MyDetailsOverviewRowPresenter(
 
 		fun setInfoValue3(text: String?) {
 			binding.infoValue3.text = text
+		}
+
+		/**
+		 * Inserts a single action view without rebuilding the row.
+		 *
+		 * [setItem] clears and re-adds every button, which flashes the whole
+		 * action row and drops focus. Actions that resolve asynchronously
+		 * (e.g. Canopy contributions) use this instead so already-visible
+		 * buttons never move or blink.
+		 */
+		fun addActionView(button: TextUnderButton, index: Int) {
+			(button.parent as? ViewGroup)?.removeView(button)
+			val position = index.coerceIn(0, binding.fdButtonRow.childCount)
+			binding.fdButtonRow.addView(button, position)
+		}
+
+		fun removeActionView(button: TextUnderButton) {
+			binding.fdButtonRow.removeView(button)
+		}
+
+		fun indexOfActionView(button: TextUnderButton): Int = binding.fdButtonRow.indexOfChild(button)
+
+		/** Updates the info columns in place, leaving the buttons untouched. */
+		fun setInfoItems(row: MyDetailsOverviewRow) {
+			binding.infoTitle1.text = row.infoItem1?.label
+			binding.infoValue1.text = row.infoItem1?.value
+
+			binding.infoTitle2.text = row.infoItem2?.label
+			binding.infoValue2.text = row.infoItem2?.value
+
+			binding.infoTitle3.text = row.infoItem3?.label
+			binding.infoValue3.text = row.infoItem3?.value
 		}
 	}
 

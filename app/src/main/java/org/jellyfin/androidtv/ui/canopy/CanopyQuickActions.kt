@@ -4,13 +4,16 @@ import android.app.AlertDialog
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.integration.canopy.CanopyClient
+import org.jellyfin.androidtv.integration.canopy.CanopyImageCache
 import org.jellyfin.androidtv.integration.canopy.CanopyContribution
 import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailCoordinator
 import org.jellyfin.androidtv.integration.canopy.CanopyItemDetailEvent
 import org.jellyfin.androidtv.ui.itemdetail.CanopyFormPresenter
 import org.jellyfin.sdk.api.client.ApiClient
+import org.koin.java.KoinJavaComponent
 import java.util.UUID
 
 /**
@@ -28,6 +31,9 @@ class CanopyQuickActions(
 	private val onChanged: () -> Unit = {},
 ) {
 	private val forms = CanopyFormPresenter(fragment)
+	private val imageCache: CanopyImageCache by lazy {
+		KoinJavaComponent.get(CanopyImageCache::class.java)
+	}
 	private var chooser: AlertDialog? = null
 	private var pendingActions: List<CanopyContribution.Action> = emptyList()
 
@@ -75,7 +81,12 @@ class CanopyQuickActions(
 				Toast.makeText(context, event.text ?: fragment.getString(fallback), Toast.LENGTH_LONG).show()
 			}
 
-			is CanopyItemDetailEvent.Refresh -> onChanged()
+			is CanopyItemDetailEvent.Refresh -> {
+				// Artwork is cached per URL and Canopy re-renders it behind the
+				// same URL, so drop cached bitmaps before anything redraws.
+				fragment.lifecycleScope.launch { imageCache.invalidate() }
+				onChanged()
+			}
 		}
 	}
 

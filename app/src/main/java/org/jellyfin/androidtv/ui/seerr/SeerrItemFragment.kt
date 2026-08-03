@@ -77,6 +77,7 @@ class SeerrItemFragment : Fragment() {
 	private var ratings: SeerrRatings? = null
 	private var capabilities: SeerrCapabilities? = null
 	private var quota: SeerrQuotaBucket? = null
+	private var requestButton: TextUnderButton? = null
 	private var requestInFlight = false
 
 	override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -98,6 +99,7 @@ class SeerrItemFragment : Fragment() {
 	override fun onDestroyView() {
 		super.onDestroyView()
 		quickActions.stop()
+		requestButton = null
 		rowsFragment = null
 		rowsAdapter = null
 		dorPresenter = null
@@ -180,11 +182,14 @@ class SeerrItemFragment : Fragment() {
 		if (requestable(details)) {
 			val label = quota?.remaining?.let { getString(R.string.canopy_seerr_request_with_quota, it) }
 				?: getString(R.string.canopy_seerr_request)
-			row.addAction(
-				TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, label) {
+			// Reuse the existing view so a late quota only relabels the button
+			// instead of swapping it out from under the user's focus.
+			val button = requestButton
+				?: TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, label) {
 					onRequestClicked(is4k = false)
-				},
-			)
+				}.also { requestButton = it }
+			button.setLabel(label)
+			row.addAction(button)
 		}
 
 		val canRequest4k = when (details.item.mediaType) {
@@ -215,11 +220,27 @@ class SeerrItemFragment : Fragment() {
 		}
 	}
 
+	/**
+	 * Applies late-arriving state (ratings, 4K capability, quota) without
+	 * rebuilding the row: [MyDetailsOverviewRowPresenter.ViewHolder.setItem]
+	 * clears and re-adds every button, which flashes the action row and moves
+	 * buttons under the user. Info columns are updated in place and only
+	 * genuinely new buttons are appended.
+	 */
 	private fun rebindDetailsRow() {
 		val row = detailsRow ?: return
 		val details = details ?: return
+		val holder = dorPresenter?.viewHolder
+		val existing = row.actions.toList()
+
 		applyRowState(row, details)
-		dorPresenter?.viewHolder?.setItem(row)
+
+		if (holder == null) return
+		holder.setInfoItems(row)
+		existing.filterNot { it in row.actions }.forEach(holder::removeActionView)
+		row.actions.forEachIndexed { index, button ->
+			if (button !in existing) holder.addActionView(button, index)
+		}
 	}
 
 	private fun requestable(details: SeerrItemDetails): Boolean =
