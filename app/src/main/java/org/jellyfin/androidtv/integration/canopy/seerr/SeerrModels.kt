@@ -11,7 +11,7 @@ import java.util.UUID
  * Unknown properties are ignored; only the members the TV UI needs are modeled.
  */
 @Serializable
-internal data class SeerrSearchResponseDto(
+internal data class SeerrListResponseDto(
 	val page: Int = 1,
 	val totalPages: Int = 1,
 	val totalResults: Int = 0,
@@ -27,6 +27,7 @@ internal data class SeerrSearchResultDto(
 	val releaseDate: String? = null,
 	val firstAirDate: String? = null,
 	val posterPath: String? = null,
+	val profilePath: String? = null,
 	val mediaInfo: SeerrMediaInfoDto? = null,
 )
 
@@ -36,6 +37,13 @@ internal data class SeerrMediaInfoDto(
 	val status4k: Int? = null,
 	val jellyfinMediaId: String? = null,
 	val jellyfinMediaId4k: String? = null,
+	val seasons: List<SeerrMediaInfoSeasonDto> = emptyList(),
+)
+
+@Serializable
+internal data class SeerrMediaInfoSeasonDto(
+	val seasonNumber: Int? = null,
+	val status: Int? = null,
 )
 
 @Serializable
@@ -46,6 +54,66 @@ internal data class SeerrUserStatusDto(
 	val message: String? = null,
 	val canRequest4kMovie: Boolean = false,
 	val canRequest4kTv: Boolean = false,
+)
+
+@Serializable
+internal data class SeerrGenreDto(
+	val id: Long? = null,
+	val name: String? = null,
+	val backdrops: List<String> = emptyList(),
+)
+
+@Serializable
+internal data class SeerrSeasonDto(
+	val seasonNumber: Int? = null,
+	val name: String? = null,
+	val episodeCount: Int? = null,
+)
+
+@Serializable
+internal data class SeerrCastMemberDto(
+	val id: Long? = null,
+	val name: String? = null,
+	val character: String? = null,
+	val profilePath: String? = null,
+)
+
+@Serializable
+internal data class SeerrCreditsDto(
+	val cast: List<SeerrCastMemberDto> = emptyList(),
+)
+
+@Serializable
+internal data class SeerrMediaDetailsDto(
+	val id: Long? = null,
+	val title: String? = null,
+	val name: String? = null,
+	val overview: String? = null,
+	val posterPath: String? = null,
+	val backdropPath: String? = null,
+	val releaseDate: String? = null,
+	val firstAirDate: String? = null,
+	val runtime: Int? = null,
+	val episodeRunTime: List<Int> = emptyList(),
+	val voteAverage: Double? = null,
+	val genres: List<SeerrGenreDto> = emptyList(),
+	val seasons: List<SeerrSeasonDto> = emptyList(),
+	val credits: SeerrCreditsDto? = null,
+	val mediaInfo: SeerrMediaInfoDto? = null,
+)
+
+@Serializable
+internal data class SeerrPersonDetailsDto(
+	val id: Long? = null,
+	val name: String? = null,
+	val biography: String? = null,
+	val profilePath: String? = null,
+	val knownForDepartment: String? = null,
+)
+
+@Serializable
+internal data class SeerrPersonCreditsDto(
+	val cast: List<SeerrSearchResultDto> = emptyList(),
 )
 
 internal enum class SeerrMediaType(val wireValue: String) {
@@ -83,7 +151,10 @@ internal enum class SeerrMediaStatus {
 	}
 }
 
-/** A single Seerr search result, mapped for native rendering. */
+/** Any entry the Seerr rows can render. */
+internal sealed interface SeerrEntry
+
+/** A movie or series, either requestable or already known to the library. */
 internal data class SeerrDiscoverItem(
 	val tmdbId: Long,
 	val mediaType: SeerrMediaType,
@@ -93,6 +164,56 @@ internal data class SeerrDiscoverItem(
 	val status: SeerrMediaStatus,
 	val status4k: SeerrMediaStatus,
 	val jellyfinMediaId: UUID?,
+) : SeerrEntry
+
+/** An actor or other person from search results or credits. */
+internal data class SeerrPersonItem(
+	val personId: Long,
+	val name: String,
+	val profileUrl: String?,
+	val role: String? = null,
+) : SeerrEntry
+
+/** A browsable genre tile. */
+internal data class SeerrGenreItem(
+	val genreId: Long,
+	val name: String,
+	val mediaType: SeerrMediaType,
+	val backdropUrl: String?,
+) : SeerrEntry
+
+/** Tail card in the search row linking to the Discover screen. */
+internal data object SeerrBrowseMoreItem : SeerrEntry
+
+/** One requestable page of discover results. */
+internal data class SeerrPage(
+	val items: List<SeerrDiscoverItem>,
+	val page: Int,
+	val hasMore: Boolean,
+)
+
+internal data class SeerrSeason(
+	val number: Int,
+	val name: String,
+	val episodeCount: Int?,
+	val status: SeerrMediaStatus,
+)
+
+internal data class SeerrItemDetails(
+	val item: SeerrDiscoverItem,
+	val overview: String?,
+	val genres: List<String>,
+	val runtimeMinutes: Int?,
+	val communityRating: Float?,
+	val backdropUrl: String?,
+	val seasons: List<SeerrSeason>,
+	val cast: List<SeerrPersonItem>,
+)
+
+internal data class SeerrPersonDetails(
+	val person: SeerrPersonItem,
+	val biography: String?,
+	val knownFor: String?,
 )
 
 internal sealed interface SeerrRequestOutcome {
