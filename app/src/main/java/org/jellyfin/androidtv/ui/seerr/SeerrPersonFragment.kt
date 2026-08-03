@@ -115,5 +115,8 @@ class SeerrPersonFragment : Fragment() {
 		val series = credits.filter { it.mediaType == SeerrMediaType.TV }
 		if (movies.isNotEmpty()) adapter.add(seerrListRow(getString(R.string.canopy_seerr_movies), movies))
 		if (series.isNotEmpty()) adapter.add(seerrListRow(getString(R.string.canopy_seerr_series_group), series))
+
+		// Claim focus for asynchronously loaded content; see SeerrItemFragment.
+		fragment.view?.post { fragment.view?.requestFocus() }
 	}
 }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.data.model.InfoItem
 import org.jellyfin.androidtv.databinding.FragmentFullDetailsBinding
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrDiscoverItem
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrItemDetails
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaStatus
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRatings
@@ -134,6 +135,12 @@ class SeerrItemFragment : Fragment() {
 		detailsRow = row
 		if (previous != null) adapter.remove(previous)
 		adapter.add(0, row)
+
+		// The previous screen's focused view is detached after the fragment
+		// replace; leanback will not reclaim focus for content that arrived
+		// asynchronously, and a d-pad event on a detached focus crashes
+		// FocusFinder (#4). Claim focus explicitly once content exists.
+		fragment.view?.post { fragment.view?.requestFocus() }
 	}
 
 	private fun loadAdditionalRows(details: SeerrItemDetails) {
@@ -145,39 +152,35 @@ class SeerrItemFragment : Fragment() {
 
 		lifecycleScope.launch {
 			val self = details.item
+			fun SeerrDiscoverItem.isSelf() = tmdbId == self.tmdbId && mediaType == self.mediaType
 
-			details.collection?.let { collection ->
-				val parts = seerrRepository.collectionParts(collection.id)
-					.filterNot { it.tmdbId == self.tmdbId && it.mediaType == self.mediaType }
-				if (!isAdded) return@launch
-				if (parts.isNotEmpty()) {
-					adapter.add(seerrListRow(getString(R.string.canopy_seerr_part_of, collection.name), parts))
+			// Load everything first, then append rows in one pass: incremental
+			// adapter mutations while the user is already navigating invite
+			// leanback focus races.
+			val rows = buildList {
+				details.collection?.let { collection ->
+					val parts = seerrRepository.collectionParts(collection.id).filterNot { it.isSelf() }
+					if (parts.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_part_of, collection.name), parts))
+				}
+
+				val similar = seerrRepository.similar(self)
+				if (similar.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_similar), similar))
+
+				val recommended = seerrRepository.recommendations(self)
+				if (recommended.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_recommended), recommended))
+
+				val moreFrom = details.studio ?: details.network
+				if (moreFrom != null) {
+					val entries = when {
+						details.studio != null -> seerrRepository.moreFromStudio(moreFrom.id)
+						else -> seerrRepository.moreFromNetwork(moreFrom.id)
+					}.filterNot { it.isSelf() }
+					if (entries.isNotEmpty()) add(seerrListRow(getString(R.string.canopy_seerr_more_from, moreFrom.name), entries))
 				}
 			}
 
-			val similar = seerrRepository.similar(self)
 			if (!isAdded) return@launch
-			if (similar.isNotEmpty()) {
-				adapter.add(seerrListRow(getString(R.string.canopy_seerr_similar), similar))
-			}
-
-			val recommended = seerrRepository.recommendations(self)
-			if (!isAdded) return@launch
-			if (recommended.isNotEmpty()) {
-				adapter.add(seerrListRow(getString(R.string.canopy_seerr_recommended), recommended))
-			}
-
-			val moreFrom = details.studio ?: details.network
-			if (moreFrom != null) {
-				val entries = when {
-					details.studio != null -> seerrRepository.moreFromStudio(moreFrom.id)
-					else -> seerrRepository.moreFromNetwork(moreFrom.id)
-				}.filterNot { it.tmdbId == self.tmdbId && it.mediaType == self.mediaType }
-				if (!isAdded) return@launch
-				if (entries.isNotEmpty()) {
-					adapter.add(seerrListRow(getString(R.string.canopy_seerr_more_from, moreFrom.name), entries))
-				}
-			}
+			rows.forEach(adapter::add)
 		}
 	}
 
