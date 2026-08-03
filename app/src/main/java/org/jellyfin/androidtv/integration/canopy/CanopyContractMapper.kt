@@ -269,14 +269,15 @@ internal object CanopyContractMapper {
 		"add" -> CanopySemanticIcon.ADD
 		"check" -> CanopySemanticIcon.CHECK
 		"settings" -> CanopySemanticIcon.SETTINGS
-		else -> CanopySemanticIcon.DEFAULT
+		else -> throw CanopyContractException(unsupported = true, message = "Unsupported semantic icon")
 	}
 
 	private fun tone(value: String?): CanopyTone = when (value) {
+		"neutral" -> CanopyTone.NEUTRAL
 		"positive" -> CanopyTone.POSITIVE
 		"warning" -> CanopyTone.WARNING
 		"negative" -> CanopyTone.NEGATIVE
-		else -> CanopyTone.NEUTRAL
+		else -> throw CanopyContractException(unsupported = true, message = "Unsupported tone")
 	}
 
 	private fun String?.checkedId(): String = requireCheckedText(this, CanopyContractBounds.MAX_ID_BYTES, "Id")

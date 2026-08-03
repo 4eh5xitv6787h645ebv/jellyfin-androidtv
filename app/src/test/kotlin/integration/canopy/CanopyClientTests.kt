@@ -79,7 +79,7 @@ class CanopyClientTests : FunSpec({
 		result shouldBe CanopyCallResult.Failure(CanopyFailureKind.INVALID_RESPONSE, 200)
 	}
 
-	test("resolve omits unknown contributions and safely falls back unknown presentation values") {
+	test("resolve omits unknown contributions and maps allowlisted presentation values") {
 		val strongEtag = "\"sha256-${"0".repeat(64)}\""
 		val transport = FixtureTransport(response(200, fixture("resolve.action-status.200.json"), mapOf("etag" to listOf(strongEtag))))
 		val result = CanopyClient(transport).resolveItemDetail(
@@ -90,7 +90,7 @@ class CanopyClientTests : FunSpec({
 		val success = result as CanopyCallResult.Success
 		success.etag shouldBe strongEtag
 		success.value.contributions.size shouldBe 2
-		(success.value.contributions[0] as CanopyContribution.Action).icon shouldBe CanopySemanticIcon.DEFAULT
+		(success.value.contributions[0] as CanopyContribution.Action).icon shouldBe CanopySemanticIcon.ADD
 		(success.value.contributions[1] as CanopyContribution.Status).tone shouldBe CanopyTone.NEUTRAL
 
 		val body = transport.lastRequest!!.body!!.jsonObject
@@ -98,6 +98,20 @@ class CanopyClientTests : FunSpec({
 		body["Item"]!!.jsonObject["Id"]!!.jsonPrimitive.content shouldBe "01234567-89ab-cdef-0123-456789abcdef"
 		body["Client"]!!.jsonObject["FieldKinds"]!!.jsonArray.map { it.jsonPrimitive.content } shouldContainExactly
 			listOf("confirmation", "boolean", "single_select", "multi_select")
+	}
+
+	test("resolve omits known contribution kinds with unknown presentation values") {
+		val fixture = fixture("resolve.action-status.200.json")
+		val unknownIcon = fixture.replace("\"SemanticIcon\": \"add\"", "\"SemanticIcon\": \"future_icon\"")
+		val unknownTone = fixture.replace("\"Tone\": \"neutral\"", "\"Tone\": \"future_tone\"")
+
+		val withoutUnknownAction = CanopyClient(FixtureTransport(response(200, unknownIcon)))
+			.resolveItemDetail(TEST_ITEM_ID) as CanopyCallResult.Success
+		withoutUnknownAction.value.contributions.map { it.id } shouldContainExactly listOf("status-1")
+
+		val withoutUnknownStatus = CanopyClient(FixtureTransport(response(200, unknownTone)))
+			.resolveItemDetail(TEST_ITEM_ID) as CanopyCallResult.Success
+		withoutUnknownStatus.value.contributions.map { it.id } shouldContainExactly listOf("action-1")
 	}
 
 	test("resolve retains only a canonical strong catalog etag") {

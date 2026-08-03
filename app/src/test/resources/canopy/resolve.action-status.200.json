@@ -6,7 +6,7 @@
       "Kind": "action",
       "Label": "Apply choice",
       "Description": "A generic action",
-      "SemanticIcon": "future_icon",
+      "SemanticIcon": "add",
       "Enabled": true,
       "PrepareHandle": "opaque-prepare-handle"
     },
@@ -14,7 +14,7 @@
       "Id": "status-1",
       "Kind": "status",
       "Label": "Ready",
-      "Tone": "future_tone"
+      "Tone": "neutral"
     },
     {
       "Kind": "future_contribution",
