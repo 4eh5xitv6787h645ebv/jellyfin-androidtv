@@ -36,7 +36,13 @@ internal object CanopyContractMapper {
 		} else {
 			requireContract(wire.protocol == null, "Incompatible negotiation supplied a protocol")
 		}
-		return CanopyNegotiation(wire.compatible, wire.protocol, wire.hostProtocolMinimum, wire.hostProtocolMaximum)
+		return CanopyNegotiation(
+			wire.compatible,
+			wire.protocol,
+			wire.hostProtocolMinimum,
+			wire.hostProtocolMaximum,
+			wire.seerrAvailable,
+		)
 	}
 
 	fun resolvedSurface(wire: CanopyResolveResponseWire): CanopyResolvedSurface {

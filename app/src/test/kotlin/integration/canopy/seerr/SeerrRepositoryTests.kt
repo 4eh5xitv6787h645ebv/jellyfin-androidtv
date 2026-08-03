@@ -6,6 +6,7 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -13,6 +14,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.jellyfin.androidtv.integration.canopy.CanopyCallResult
+import org.jellyfin.androidtv.integration.canopy.CanopyGateway
+import org.jellyfin.androidtv.integration.canopy.CanopyNegotiation
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpMethod
 import org.jellyfin.sdk.api.client.RawResponse
@@ -323,6 +327,38 @@ class SeerrRepositoryTests : FunSpec({
 		// legacy proxy: raw Seerr request object, no envelope
 		answerBody("""{"id":123,"status":1,"media":{"tmdbId":550}}""")
 		repository.submitRequest(item, false) shouldBe SeerrRequestOutcome.Submitted
+	}
+
+	test("availability prefers the platform hint and falls back for older hosts") {
+		val apiClient = mockk<ApiClient>()
+		every { apiClient.accessToken } returns "token"
+
+		fun repositoryWith(negotiation: CanopyCallResult<CanopyNegotiation>): SeerrRepository {
+			val gateway = mockk<CanopyGateway>()
+			coEvery { gateway.negotiate(any(), any()) } returns negotiation
+			return SeerrRepository(apiClient, gateway)
+		}
+
+		// Host advertises the hint: no user-status request is needed at all.
+		val hinted = repositoryWith(
+			CanopyCallResult.Success(CanopyNegotiation(true, 1, 1, 1, seerrAvailable = true)),
+		)
+		hinted.resolveAvailability() shouldBe true
+		hinted.availability.value shouldBe true
+		coVerify(exactly = 0) { apiClient.request(any(), any(), any(), any(), any()) }
+
+		// Older host omits the hint: fall back to user-status.
+		coEvery {
+			apiClient.request(HttpMethod.GET, "/JellyfinCanopy/seerr/user-status", emptyMap(), any(), null)
+		} returns RawResponse("""{"active":true,"userFound":true}""".encodeToByteArray(), 200, emptyMap())
+		val legacy = repositoryWith(
+			CanopyCallResult.Success(CanopyNegotiation(true, 1, 1, 1, seerrAvailable = null)),
+		)
+		legacy.resolveAvailability() shouldBe true
+
+		// Platform absent entirely: still resolvable through the proxy.
+		val absent = repositoryWith(CanopyCallResult.Absent)
+		absent.resolveAvailability() shouldBe true
 	}
 
 	test("media status wire mapping") {

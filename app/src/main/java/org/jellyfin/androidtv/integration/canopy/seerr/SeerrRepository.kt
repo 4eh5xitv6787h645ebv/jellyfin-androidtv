@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.jellyfin.androidtv.integration.canopy.CanopyCallResult
+import org.jellyfin.androidtv.integration.canopy.CanopyClient
+import org.jellyfin.androidtv.integration.canopy.CanopyGateway
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -33,6 +36,7 @@ import java.util.Locale
  */
 internal class SeerrRepository(
 	private val apiClient: ApiClient,
+	private val gateway: CanopyGateway = CanopyClient(apiClient),
 ) {
 	private val json = Json { ignoreUnknownKeys = true }
 
@@ -44,11 +48,29 @@ internal class SeerrRepository(
 	private val _availability = MutableStateFlow<Boolean?>(null)
 
 	/**
-	 * Last known Seerr availability for the current session; null until the
-	 * first [capabilities] resolution. Lets UI (e.g. the toolbar Discover
-	 * button) omit Seerr surfaces gracefully instead of showing dead ends.
+	 * Last known Seerr availability for the current session; null until it has
+	 * been resolved. Lets UI (e.g. the toolbar Discover button) omit Seerr
+	 * surfaces gracefully instead of showing dead ends.
 	 */
 	val availability: StateFlow<Boolean?> = _availability.asStateFlow()
+
+	/**
+	 * Resolves availability for surface gating only, preferring the platform's
+	 * `SeerrAvailable` hint on negotiate: it answers the same question as
+	 * `user-status` without a second authorized round trip. Hosts predating the
+	 * hint (or with the platform disabled) fall back to [capabilities].
+	 */
+	suspend fun resolveAvailability(): Boolean {
+		val negotiated = when (val result = gateway.negotiate()) {
+			is CanopyCallResult.Success -> result.value.takeIf { it.compatible }?.seerrAvailable
+			else -> null
+		}
+		if (negotiated != null) {
+			_availability.value = negotiated
+			return negotiated
+		}
+		return capabilities().available
+	}
 
 	/**
 	 * Resolves whether Seerr is configured, reachable and linked for the
