@@ -79,6 +79,7 @@ class SeerrDiscoverFragment : Fragment() {
 			}
 
 			val rows = listOf(
+				R.string.canopy_seerr_watchlist to suspend { seerrRepository.watchlist() },
 				R.string.canopy_seerr_trending to suspend { seerrRepository.trending() },
 				R.string.canopy_seerr_popular_movies to suspend { seerrRepository.popularMovies() },
 				R.string.canopy_seerr_upcoming_movies to suspend { seerrRepository.upcomingMovies() },

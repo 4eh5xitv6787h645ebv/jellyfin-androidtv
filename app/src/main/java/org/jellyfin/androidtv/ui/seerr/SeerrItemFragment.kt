@@ -19,6 +19,7 @@ import org.jellyfin.androidtv.data.model.InfoItem
 import org.jellyfin.androidtv.databinding.FragmentFullDetailsBinding
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrItemDetails
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaStatus
+import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRatings
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrMediaType
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRepository
 import org.jellyfin.androidtv.integration.canopy.seerr.SeerrRequestOutcome
@@ -59,6 +60,7 @@ class SeerrItemFragment : Fragment() {
 	private var rowsAdapter: MutableObjectAdapter<Row>? = null
 	private var detailsRow: MyDetailsOverviewRow? = null
 	private var details: SeerrItemDetails? = null
+	private var ratings: SeerrRatings? = null
 	private var requestInFlight = false
 
 	override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -97,6 +99,8 @@ class SeerrItemFragment : Fragment() {
 			}
 
 			details = loaded
+			ratings = seerrRepository.ratings(loaded.item).takeUnless { it.isEmpty }
+			if (!isAdded) return@launch
 			showDetails(loaded)
 			loadAdditionalRows(loaded)
 		}
@@ -122,6 +126,7 @@ class SeerrItemFragment : Fragment() {
 			infoItem1 = seerrStatusLabelRes(details.item.status)?.let { statusRes ->
 				InfoItem(getString(R.string.canopy_seerr_status), getString(statusRes))
 			},
+			infoItem2 = ratings?.let { InfoItem(getString(R.string.canopy_seerr_ratings), it.displayText()) },
 		)
 		buildActions(row, details)
 
@@ -139,30 +144,72 @@ class SeerrItemFragment : Fragment() {
 		}
 
 		lifecycleScope.launch {
-			val similar = seerrRepository.similar(details.item)
+			val self = details.item
+
+			details.collection?.let { collection ->
+				val parts = seerrRepository.collectionParts(collection.id)
+					.filterNot { it.tmdbId == self.tmdbId && it.mediaType == self.mediaType }
+				if (!isAdded) return@launch
+				if (parts.isNotEmpty()) {
+					adapter.add(seerrListRow(getString(R.string.canopy_seerr_part_of, collection.name), parts))
+				}
+			}
+
+			val similar = seerrRepository.similar(self)
 			if (!isAdded) return@launch
 			if (similar.isNotEmpty()) {
 				adapter.add(seerrListRow(getString(R.string.canopy_seerr_similar), similar))
 			}
 
-			val recommended = seerrRepository.recommendations(details.item)
+			val recommended = seerrRepository.recommendations(self)
 			if (!isAdded) return@launch
 			if (recommended.isNotEmpty()) {
 				adapter.add(seerrListRow(getString(R.string.canopy_seerr_recommended), recommended))
 			}
+
+			val moreFrom = details.studio ?: details.network
+			if (moreFrom != null) {
+				val entries = when {
+					details.studio != null -> seerrRepository.moreFromStudio(moreFrom.id)
+					else -> seerrRepository.moreFromNetwork(moreFrom.id)
+				}.filterNot { it.tmdbId == self.tmdbId && it.mediaType == self.mediaType }
+				if (!isAdded) return@launch
+				if (entries.isNotEmpty()) {
+					adapter.add(seerrListRow(getString(R.string.canopy_seerr_more_from, moreFrom.name), entries))
+				}
+			}
 		}
 	}
+
+	private fun SeerrRatings.displayText(): String = buildList {
+		rtCritics?.let { add(getString(R.string.canopy_seerr_rating_critics, it)) }
+		rtAudience?.let { add(getString(R.string.canopy_seerr_rating_audience, it)) }
+		imdb?.let { add(getString(R.string.canopy_seerr_rating_imdb, it)) }
+	}.joinToString(separator = " · ")
 
 	private fun buildActions(row: MyDetailsOverviewRow, details: SeerrItemDetails) {
 		val context = requireContext()
 		val buttonSize = Utils.convertDpToPixel(context, 40)
 
 		if (details.item.status.requestable || hasRequestableSeasons(details)) {
-			row.addAction(
-				TextUnderButton.create(context, R.drawable.ic_add, buttonSize, 2, getString(R.string.canopy_seerr_request)) {
-					onRequestClicked(is4k = false)
-				},
-			)
+			val requestButton = TextUnderButton.create(
+				context,
+				R.drawable.ic_add,
+				buttonSize,
+				2,
+				getString(R.string.canopy_seerr_request),
+			) {
+				onRequestClicked(is4k = false)
+			}
+			row.addAction(requestButton)
+
+			lifecycleScope.launch {
+				val quota = seerrRepository.quota(details.item.mediaType)
+				val remaining = quota?.remaining
+				if (remaining != null && isAdded) {
+					requestButton.setLabel(getString(R.string.canopy_seerr_request_with_quota, remaining))
+				}
+			}
 		}
 
 		lifecycleScope.launch {
@@ -190,7 +237,12 @@ class SeerrItemFragment : Fragment() {
 
 		when (details.item.mediaType) {
 			SeerrMediaType.MOVIE -> submit { seerrRepository.submitRequest(details.item, is4k) }
-			SeerrMediaType.TV -> showSeasonPicker(details, is4k)
+			SeerrMediaType.TV -> lifecycleScope.launch {
+				// Season selection is only offered when the Seerr server allows
+				// partial series requests; otherwise request the whole series.
+				if (seerrRepository.partialRequestsEnabled() && isAdded) showSeasonPicker(details, is4k)
+				else submit { seerrRepository.submitRequest(details.item, is4k) }
+			}
 		}
 	}
 

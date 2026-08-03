@@ -119,6 +119,14 @@
     <string name="canopy_seerr_request_seasons_title">Request seasons</string>
     <string name="canopy_seerr_no_requestable_seasons">All seasons are already requested or available.</string>
     <string name="canopy_seerr_season_episodes">%1$s (%2$d episodes)</string>
+    <string name="canopy_seerr_watchlist">Your watchlist</string>
+    <string name="canopy_seerr_part_of">Part of %1$s</string>
+    <string name="canopy_seerr_more_from">More from %1$s</string>
+    <string name="canopy_seerr_ratings">Ratings</string>
+    <string name="canopy_seerr_rating_critics">Critics %1$d%%</string>
+    <string name="canopy_seerr_rating_audience">Audience %1$d%%</string>
+    <string name="canopy_seerr_rating_imdb">IMDb %1$.1f</string>
+    <string name="canopy_seerr_request_with_quota">Request (%1$d left)</string>
     <string name="lbl_people">People</string>
     <string name="lbl_videos">Videos</string>
     <string name="lbl_recordings">Recordings</string>

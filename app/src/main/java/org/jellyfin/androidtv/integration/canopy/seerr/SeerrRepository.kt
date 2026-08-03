@@ -95,6 +95,11 @@ internal class SeerrRepository(
 	}
 
 	suspend fun trending(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/trending")
+	suspend fun watchlist(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/watchlist")
+	suspend fun moreFromStudio(studioId: Long): List<SeerrDiscoverItem> =
+		discover("/JellyfinCanopy/seerr/discover/movies/studio/$studioId")
+	suspend fun moreFromNetwork(networkId: Long): List<SeerrDiscoverItem> =
+		discover("/JellyfinCanopy/seerr/discover/tv/network/$networkId")
 	suspend fun popularMovies(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/movies")
 	suspend fun upcomingMovies(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/movies/upcoming")
 	suspend fun popularSeries(): List<SeerrDiscoverItem> = discover("/JellyfinCanopy/seerr/discover/tv")
@@ -149,6 +154,78 @@ internal class SeerrRepository(
 			Timber.w(error, "Seerr genre discover returned an unexpected shape")
 			SeerrPage(emptyList(), page, hasMore = false)
 		}
+	}
+
+	/** Movies belonging to a collection, e.g. all parts of a film series. */
+	suspend fun collectionParts(collectionId: Long): List<SeerrDiscoverItem> = try {
+		json.decodeFromString<SeerrCollectionDto>(
+			get("/JellyfinCanopy/seerr/collection/$collectionId", mapOf("language" to language())).decodeToString(),
+		).parts.mapNotNull { it.toDiscoverItem() }.take(MAX_ROW_RESULTS)
+	} catch (error: ApiClientException) {
+		Timber.d(error, "Seerr collection failed for %d", collectionId)
+		emptyList()
+	} catch (error: SerializationException) {
+		Timber.w(error, "Seerr collection returned an unexpected shape")
+		emptyList()
+	}
+
+	/** Combined critic/audience ratings; null members when a source is absent. */
+	suspend fun ratings(item: SeerrDiscoverItem): SeerrRatings = try {
+		when (item.mediaType) {
+			SeerrMediaType.MOVIE -> {
+				val dto = json.decodeFromString<SeerrRatingsCombinedDto>(
+					get("/JellyfinCanopy/seerr/movie/${item.tmdbId}/ratingscombined").decodeToString(),
+				)
+				SeerrRatings(
+					rtCritics = dto.rt?.criticsScore?.toInt(),
+					rtAudience = dto.rt?.audienceScore?.toInt(),
+					imdb = dto.imdb?.criticsScore,
+				)
+			}
+
+			SeerrMediaType.TV -> {
+				val dto = json.decodeFromString<SeerrRatingSourceDto>(
+					get("/JellyfinCanopy/seerr/tv/${item.tmdbId}/ratings").decodeToString(),
+				)
+				SeerrRatings(
+					rtCritics = dto.criticsScore?.toInt(),
+					rtAudience = dto.audienceScore?.toInt(),
+					imdb = null,
+				)
+			}
+		}
+	} catch (error: ApiClientException) {
+		Timber.d(error, "Seerr ratings failed for %d", item.tmdbId)
+		EMPTY_RATINGS
+	} catch (error: SerializationException) {
+		Timber.w(error, "Seerr ratings returned an unexpected shape")
+		EMPTY_RATINGS
+	}
+
+	/** Remaining request quota for one media type; null when unlimited/unknown. */
+	suspend fun quota(mediaType: SeerrMediaType): SeerrQuotaBucket? = try {
+		val dto = json.decodeFromString<SeerrQuotaDto>(get("/JellyfinCanopy/seerr/quota").decodeToString())
+		val bucket = if (mediaType == SeerrMediaType.MOVIE) dto.movie else dto.tv
+		bucket?.takeIf { it.restricted }?.let { SeerrQuotaBucket(it.remaining, it.restricted) }
+	} catch (error: ApiClientException) {
+		Timber.d(error, "Seerr quota unavailable")
+		null
+	} catch (error: SerializationException) {
+		Timber.w(error, "Seerr quota returned an unexpected shape")
+		null
+	}
+
+	/** Whether the Seerr server allows per-season (partial) series requests. */
+	suspend fun partialRequestsEnabled(): Boolean = try {
+		json.decodeFromString<SeerrRequestSettingsDto>(
+			get("/JellyfinCanopy/seerr/settings/partial-requests").decodeToString(),
+		).partialRequestsEnabled
+	} catch (error: ApiClientException) {
+		Timber.d(error, "Seerr request settings unavailable")
+		true
+	} catch (error: SerializationException) {
+		Timber.w(error, "Seerr request settings returned an unexpected shape")
+		true
 	}
 
 	suspend fun similar(item: SeerrDiscoverItem): List<SeerrDiscoverItem> =
@@ -293,7 +370,8 @@ internal class SeerrRepository(
 	private fun language(): String = Locale.getDefault().language.ifBlank { "en" }
 
 	private fun SeerrSearchResultDto.toDiscoverItem(): SeerrDiscoverItem? {
-		val tmdbId = id ?: return null
+		// Watchlist entries carry tmdbId instead of id.
+		val resolvedId = id ?: tmdbId ?: return null
 		val type = SeerrMediaType.fromWire(mediaType) ?: return null
 		val name = (if (type == SeerrMediaType.MOVIE) title else name)?.takeIf { it.isNotBlank() }
 			?: title?.takeIf { it.isNotBlank() }
@@ -301,7 +379,7 @@ internal class SeerrRepository(
 			?: return null
 
 		return SeerrDiscoverItem(
-			tmdbId = tmdbId,
+			tmdbId = resolvedId,
 			mediaType = type,
 			title = name,
 			year = (if (type == SeerrMediaType.MOVIE) releaseDate else firstAirDate)
@@ -364,6 +442,9 @@ internal class SeerrRepository(
 					status = seasonStatuses[number] ?: SeerrMediaStatus.NOT_REQUESTED,
 				)
 			},
+			collection = collection?.toNamedRef(),
+			studio = productionCompanies.firstNotNullOfOrNull { it.toNamedRef() },
+			network = networks.firstNotNullOfOrNull { it.toNamedRef() },
 			cast = credits?.cast.orEmpty().mapNotNull { member ->
 				val personId = member.id ?: return@mapNotNull null
 				val personName = member.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -375,6 +456,18 @@ internal class SeerrRepository(
 				)
 			}.take(MAX_ROW_RESULTS),
 		)
+	}
+
+	private fun SeerrCollectionRefDto.toNamedRef(): SeerrNamedRef? {
+		val refId = id ?: return null
+		val refName = name?.takeIf { it.isNotBlank() } ?: return null
+		return SeerrNamedRef(refId, refName)
+	}
+
+	private fun SeerrCompanyDto.toNamedRef(): SeerrNamedRef? {
+		val refId = id ?: return null
+		val refName = name?.takeIf { it.isNotBlank() } ?: return null
+		return SeerrNamedRef(refId, refName)
 	}
 
 	private fun String.toTmdbImageUrl(base: String): String? =
@@ -389,6 +482,7 @@ internal class SeerrRepository(
 		private const val TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w400"
 		private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
 		private val TMDB_PATH_PATTERN = Regex("^/[A-Za-z0-9._-]+\\.(?:jpg|jpeg|png|webp)$")
+		private val EMPTY_RATINGS = SeerrRatings(null, null, null)
 		private val UNAVAILABLE = SeerrCapabilities(
 			available = false,
 			canRequest4kMovie = false,

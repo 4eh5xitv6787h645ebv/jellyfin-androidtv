@@ -21,6 +21,7 @@ internal data class SeerrListResponseDto(
 @Serializable
 internal data class SeerrSearchResultDto(
 	val id: Long? = null,
+	val tmdbId: Long? = null,
 	val mediaType: String? = null,
 	val title: String? = null,
 	val name: String? = null,
@@ -84,6 +85,55 @@ internal data class SeerrCreditsDto(
 )
 
 @Serializable
+internal data class SeerrCompanyDto(
+	val id: Long? = null,
+	val name: String? = null,
+)
+
+@Serializable
+internal data class SeerrCollectionRefDto(
+	val id: Long? = null,
+	val name: String? = null,
+)
+
+@Serializable
+internal data class SeerrCollectionDto(
+	val id: Long? = null,
+	val name: String? = null,
+	val parts: List<SeerrSearchResultDto> = emptyList(),
+)
+
+@Serializable
+internal data class SeerrRatingSourceDto(
+	val criticsScore: Double? = null,
+	val audienceScore: Double? = null,
+)
+
+@Serializable
+internal data class SeerrRatingsCombinedDto(
+	val rt: SeerrRatingSourceDto? = null,
+	val imdb: SeerrRatingSourceDto? = null,
+)
+
+@Serializable
+internal data class SeerrQuotaBucketDto(
+	val limit: Int? = null,
+	val remaining: Int? = null,
+	val restricted: Boolean = false,
+)
+
+@Serializable
+internal data class SeerrQuotaDto(
+	val movie: SeerrQuotaBucketDto? = null,
+	val tv: SeerrQuotaBucketDto? = null,
+)
+
+@Serializable
+internal data class SeerrRequestSettingsDto(
+	val partialRequestsEnabled: Boolean = true,
+)
+
+@Serializable
 internal data class SeerrMediaDetailsDto(
 	val id: Long? = null,
 	val title: String? = null,
@@ -100,6 +150,9 @@ internal data class SeerrMediaDetailsDto(
 	val seasons: List<SeerrSeasonDto> = emptyList(),
 	val credits: SeerrCreditsDto? = null,
 	val mediaInfo: SeerrMediaInfoDto? = null,
+	val collection: SeerrCollectionRefDto? = null,
+	val productionCompanies: List<SeerrCompanyDto> = emptyList(),
+	val networks: List<SeerrCompanyDto> = emptyList(),
 )
 
 @Serializable
@@ -199,6 +252,25 @@ internal data class SeerrSeason(
 	val status: SeerrMediaStatus,
 )
 
+/** A named reference used for collection / studio / network follow-up rows. */
+internal data class SeerrNamedRef(
+	val id: Long,
+	val name: String,
+)
+
+internal data class SeerrRatings(
+	val rtCritics: Int?,
+	val rtAudience: Int?,
+	val imdb: Double?,
+) {
+	val isEmpty: Boolean get() = rtCritics == null && rtAudience == null && imdb == null
+}
+
+internal data class SeerrQuotaBucket(
+	val remaining: Int?,
+	val restricted: Boolean,
+)
+
 internal data class SeerrItemDetails(
 	val item: SeerrDiscoverItem,
 	val overview: String?,
@@ -208,6 +280,9 @@ internal data class SeerrItemDetails(
 	val backdropUrl: String?,
 	val seasons: List<SeerrSeason>,
 	val cast: List<SeerrPersonItem>,
+	val collection: SeerrNamedRef? = null,
+	val studio: SeerrNamedRef? = null,
+	val network: SeerrNamedRef? = null,
 )
 
 internal data class SeerrPersonDetails(

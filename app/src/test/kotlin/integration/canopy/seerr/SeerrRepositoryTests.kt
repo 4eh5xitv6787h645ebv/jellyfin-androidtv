@@ -230,6 +230,75 @@ class SeerrRepositoryTests : FunSpec({
 		(repository.search("x").single() as SeerrDiscoverItem).posterUrl.shouldBeNull()
 	}
 
+	test("watchlist entries resolve tmdbId and render as discover items") {
+		val repository = SeerrRepository(
+			apiWith(
+				"/JellyfinCanopy/seerr/watchlist" to """
+					{"page": 1, "totalPages": 1, "totalResults": 1,
+					 "results": [{"tmdbId": 27205, "mediaType": "movie", "title": "Inception"}]}
+				""".trimIndent(),
+			),
+		)
+
+		repository.watchlist().single().tmdbId shouldBe 27205L
+	}
+
+	test("details expose collection, studio and network references") {
+		val repository = SeerrRepository(
+			apiWith(
+				"/JellyfinCanopy/seerr/movie/121" to """
+					{"id": 121, "title": "The Two Towers", "releaseDate": "2002-12-18",
+					 "collection": {"id": 119, "name": "The Lord of the Rings Collection"},
+					 "productionCompanies": [{"id": 12, "name": "New Line Cinema"}],
+					 "networks": []}
+				""".trimIndent(),
+			),
+		)
+
+		val details = repository.details(SeerrMediaType.MOVIE, 121).shouldNotBeNull()
+		details.collection shouldBe SeerrNamedRef(119, "The Lord of the Rings Collection")
+		details.studio shouldBe SeerrNamedRef(12, "New Line Cinema")
+		details.network.shouldBeNull()
+	}
+
+	test("collection parts map and combined ratings parse") {
+		val repository = SeerrRepository(
+			apiWith(
+				"/JellyfinCanopy/seerr/collection/119" to """
+					{"id": 119, "name": "LOTR", "parts": [
+						{"id": 120, "mediaType": "movie", "title": "The Fellowship of the Ring", "releaseDate": "2001-12-19"}
+					]}
+				""".trimIndent(),
+				"/JellyfinCanopy/seerr/movie/120/ratingscombined" to
+					"""{"rt": {"criticsScore": 91.0, "audienceScore": 95.0}, "imdb": {"criticsScore": 8.9}}""",
+			),
+		)
+
+		repository.collectionParts(119).single().title shouldBe "The Fellowship of the Ring"
+
+		val item = SeerrDiscoverItem(120, SeerrMediaType.MOVIE, "x", null, null,
+			SeerrMediaStatus.NOT_REQUESTED, SeerrMediaStatus.NOT_REQUESTED, null)
+		val ratings = repository.ratings(item)
+		ratings.rtCritics shouldBe 91
+		ratings.rtAudience shouldBe 95
+		ratings.imdb shouldBe 8.9
+	}
+
+	test("quota only surfaces restricted buckets and settings default open") {
+		val repository = SeerrRepository(
+			apiWith(
+				"/JellyfinCanopy/seerr/quota" to
+					"""{"movie": {"limit": 5, "remaining": 2, "restricted": true}, "tv": {"restricted": false}}""",
+				"/JellyfinCanopy/seerr/settings/partial-requests" to
+					"""{"partialRequestsEnabled": false, "enableSpecialEpisodes": false}""",
+			),
+		)
+
+		repository.quota(SeerrMediaType.MOVIE)?.remaining shouldBe 2
+		repository.quota(SeerrMediaType.TV).shouldBeNull()
+		repository.partialRequestsEnabled() shouldBe false
+	}
+
 	test("media status wire mapping") {
 		SeerrMediaStatus.fromWire(null) shouldBe SeerrMediaStatus.NOT_REQUESTED
 		SeerrMediaStatus.fromWire(1) shouldBe SeerrMediaStatus.NOT_REQUESTED
