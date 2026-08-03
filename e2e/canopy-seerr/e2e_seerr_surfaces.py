@@ -146,6 +146,31 @@ def preferences_point(d):
     return None
 
 
+def ensure_seerr_enabled(d):
+    """Force the Seerr surfaces on before any scenario runs.
+
+    The settings scenario deliberately toggles this preference off to prove
+    the surfaces disappear, and restores it afterwards. A run interrupted
+    between those two steps leaves it off *persisted on the device*, which
+    silently fails every Seerr scenario in later runs and looks exactly like
+    an app regression. Normalising here makes runs independent of how the
+    previous one ended.
+    """
+    home(d)
+    if d.has_text('Discover'):
+        return True
+    if not open_canopy_settings(d):
+        return False
+    d.tap_text('Seerr search suggestions')
+    time.sleep(1.5)
+    for _ in range(3):
+        d.key(atv.KEY_BACK)
+    home(d)
+    restored = d.has_text('Discover')
+    print('  (normalised Seerr preference back on: %s)' % restored, flush=True)
+    return restored
+
+
 def open_canopy_settings(d):
     home(d)
     p = preferences_point(d)
@@ -351,6 +376,15 @@ def scenario_library(d):
 
 def scenario_settings(d):
     """Placement options render; the Seerr toggle hides and restores surfaces."""
+    try:
+        _scenario_settings(d)
+    finally:
+        # This scenario is the only one that mutates persisted state; never
+        # leave it off, however the scenario ended.
+        ensure_seerr_enabled(d)
+
+
+def _scenario_settings(d):
     if not open_canopy_settings(d):
         step('placement setting shows all options', False, 'settings unavailable')
         step('seerr toggle hides Discover surfaces', False, 'settings unavailable')
@@ -435,6 +469,7 @@ def main():
     os.makedirs(EVIDENCE, exist_ok=True)
     d.clear_logs()
     cold_start(d)
+    ensure_seerr_enabled(d)
 
     run_started = time.monotonic()
     for name, fn in selected:
