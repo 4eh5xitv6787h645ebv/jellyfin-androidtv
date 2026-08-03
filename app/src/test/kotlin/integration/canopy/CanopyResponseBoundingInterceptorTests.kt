@@ -40,8 +40,77 @@ class CanopyResponseBoundingInterceptorTests : FunSpec({
 		)
 
 		CanopyPlatformRoutes.exact("POST", "/JellyfinCanopy/Platform/v1/discovery") shouldBe null
-		CanopyPlatformRoutes.exact("GET", "/prefix/JellyfinCanopy/Platform/v1/discovery") shouldBe null
+		CanopyPlatformRoutes.exact("GET", "/prefix/JellyfinCanopy/Platform/v1/discovery") shouldBe
+			CanopyPlatformRoutes.discovery
 		CanopyPlatformRoutes.exact("GET", "/JellyfinCanopy/Platform/v1/discovery/") shouldBe null
+	}
+
+	test("real SDK composition bounds all five routes at root and configured base paths") {
+		listOf(
+			"" to "https://example.invalid",
+			"/jellyfin" to "https://example.invalid/jellyfin",
+			"/my%20jellyfin" to "https://example.invalid/my%20jellyfin",
+		).forEach { (expectedPrefix, baseUrl) ->
+			val observedPaths = mutableListOf<String>()
+			val responseProvider = Interceptor { chain ->
+				observedPaths += chain.request().url.encodedPath
+				response(
+					chain.request(),
+					200,
+					"x".repeat(CanopyContractBounds.MAX_RESOLVE_BYTES + 20),
+				)
+			}
+			val base = OkHttpClient.Builder()
+				.addInterceptor(CanopyResponseBoundingInterceptor())
+				.addInterceptor(responseProvider)
+				.build()
+			val factory = OkHttpFactory(base)
+			val api = factory.create(
+				baseUrl,
+				"test-access-token",
+				ClientInfo("Canopy prefix test", "1"),
+				DeviceInfo("test-device", "Test device"),
+				HttpClientOptions(),
+				factory,
+			)
+			val transport = ApiClientCanopyTransport(api)
+
+			CanopyPlatformRoutes.all.forEach { route ->
+				val result = transport.request(
+					route.method,
+					route.encodedPath,
+					mapOf("query-is-irrelevant" to "1"),
+					null,
+					route.maximumResponseBytes,
+				)
+
+				result.bodyReadMode shouldBe CanopyBodyReadMode.BOUNDED_DURING_READ
+				result.body.size shouldBe route.maximumResponseBytes + 1
+			}
+
+			observedPaths shouldContainExactly CanopyPlatformRoutes.all.map { expectedPrefix + it.encodedPath }
+		}
+	}
+
+	test("prefix matcher rejects method suffix duplicate slash encoding and case near-matches") {
+		val nearMatches = listOf(
+			"POST" to "/jellyfin/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/jellyfin/JellyfinCanopy/Platform/v1/discovery/suffix",
+			"GET" to "/JellyfinCanopy/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/%4AellyfinCanopy/JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/jellyfin//JellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/jellyfin/jellyfincanopy/Platform/v1/discovery",
+			"GET" to "/jellyfin/%4AellyfinCanopy/Platform/v1/discovery",
+			"GET" to "/jellyfin/JellyfinCanopy%2FPlatform/v1/discovery",
+		)
+
+		nearMatches.forEach { (method, path) ->
+			CanopyPlatformRoutes.exact(method, path) shouldBe null
+			val request = request(method, path)
+			val upstream = response(request, 200, "x".repeat(CanopyContractBounds.MAX_RESOLVE_BYTES + 20))
+
+			CanopyResponseBoundingInterceptor().intercept(chain(request, upstream)) shouldBe upstream
+		}
 	}
 
 	test("an unrelated response passes through untouched") {

@@ -1,5 +1,6 @@
 package org.jellyfin.androidtv.integration.canopy
 
+import java.net.URLDecoder
 import org.jellyfin.sdk.api.client.HttpMethod
 
 internal data class CanopyPlatformRoute(
@@ -29,7 +30,30 @@ internal object CanopyPlatformRoutes {
 
 	val all = listOf(discovery, negotiate, resolveItemDetail, prepare, invoke)
 
-	fun exact(method: String, encodedPath: String): CanopyPlatformRoute? = all.singleOrNull {
-		it.method.name == method && it.encodedPath == encodedPath
+	fun exact(method: String, encodedPath: String): CanopyPlatformRoute? = all.singleOrNull { route ->
+		route.method.name == method && encodedPath.hasExactTerminalRoute(route.encodedPath)
 	}
+
+	private fun String.hasExactTerminalRoute(routePath: String): Boolean {
+		if (this == routePath) return true
+		if (!endsWith(routePath)) return false
+		return dropLast(routePath.length).isValidBasePathPrefix()
+	}
+
+	private fun String.isValidBasePathPrefix(): Boolean {
+		if (!startsWith('/') || endsWith('/')) return false
+		return drop(1).split('/').all { it.isValidBasePathSegment() }
+	}
+
+	private fun String.isValidBasePathSegment(): Boolean {
+		val decoded = runCatching {
+			// URLDecoder is form-oriented; preserve literal path '+' before decoding.
+			URLDecoder.decode(replace("+", "%2B"), Charsets.UTF_8.name())
+		}.getOrNull() ?: return false
+		if (decoded.isEmpty() || decoded == "." || decoded == "..") return false
+		if (decoded.equals(CANOPY_ROOT_SEGMENT, ignoreCase = true)) return false
+		return '/' !in decoded && '\\' !in decoded
+	}
+
+	private const val CANOPY_ROOT_SEGMENT = "JellyfinCanopy"
 }
