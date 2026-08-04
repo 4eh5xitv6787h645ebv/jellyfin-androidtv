@@ -355,7 +355,7 @@
     <string name="pref_playback">Spæling</string>
     <string name="lbl_continue_watching">Hald áfram at hyggja</string>
     <string name="lbl_views">Sýningar</string>
-    <string name="lbl_pause">Steðga</string>
+    <string name="lbl_pause">Pausa</string>
     <string name="pref_audio_direct">Beinleiðis</string>
     <string name="playback_info_transcoding">Umkotar</string>
     <string name="playback_info_transcoding_note">Ambætarin umkotar fíluna</string>
@@ -423,4 +423,5 @@
     <string name="subtitle_preview_text">Undirtekstir koma at síggja soleiðis út</string>
     <string name="preference_enable_ass_description">Royndarfunka ið kann vera óálítandi</string>
     <string name="preference_enable_pgs_description">Um óvirkt er umkoting neyðug</string>
+    <string name="playback_info_bitrate">Bitferð: %1$s</string>
 </resources>
