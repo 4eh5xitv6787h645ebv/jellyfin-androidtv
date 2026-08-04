@@ -10,11 +10,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.TypedValue;
-import android.graphics.text.LineBreaker;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -618,8 +618,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
                 .obtain(label, 0, label.length(), paint, width)
                 .setMaxLines(BUTTON_LABEL_MAX_LINES)
                 .setEllipsize(TextUtils.TruncateAt.END)
-                .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
-                .setHyphenationFrequency(LineBreaker.HYPHENATION_FREQUENCY_NONE)
+                .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                 .build();
 
         for (int line = 0; line < layout.getLineCount(); line++) {
