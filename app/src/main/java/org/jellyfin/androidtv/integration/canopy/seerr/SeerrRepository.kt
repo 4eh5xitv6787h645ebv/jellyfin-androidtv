@@ -496,8 +496,11 @@ internal class SeerrRepository(
 				year = (if (mediaType == SeerrMediaType.MOVIE) releaseDate else firstAirDate)
 					?.take(YEAR_LENGTH)?.toIntOrNull(),
 				posterUrl = posterPath?.toTmdbImageUrl(TMDB_POSTER_BASE),
-				status = SeerrMediaStatus.fromWire(mediaInfo?.status),
-				status4k = SeerrMediaStatus.fromWire(mediaInfo?.status4k),
+				// Same effective status the cards use: a title linked to a
+				// Jellyfin item is in the library whatever Seerr reports, and
+				// must not be offered for request again.
+				status = effectiveStatus(mediaInfo?.status, mediaInfo?.jellyfinMediaId),
+				status4k = effectiveStatus(mediaInfo?.status4k, mediaInfo?.jellyfinMediaId4k),
 				jellyfinMediaId = (mediaInfo?.jellyfinMediaId ?: mediaInfo?.jellyfinMediaId4k)?.toUUIDOrNull(),
 			),
 			overview = overview?.takeIf { it.isNotBlank() },

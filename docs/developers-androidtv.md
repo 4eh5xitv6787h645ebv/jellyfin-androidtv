@@ -209,6 +209,30 @@ sunset date and then fails with no warning.
 a **developer** signal, not a user-facing one: a viewer cannot act on it, so it
 must never reach the UI or repeat per request.
 
+### T10b — A control never shows a clipped label
+
+Detail-row buttons are a fixed-width, two-line field. Contribution labels come
+from the *server* and are far longer than the app's own one-word labels
+("Play", "Watched"), so they overflow: first wrapping oddly, then breaking
+**mid-word** into things like `Con figure`.
+
+Two rules, both enforced in `FullDetailsFragment`:
+
+1. **Measure, do not guess.** An action becomes a button only when its label
+   renders whole at the button's real dimensions (`labelFitsButton` builds a
+   `StaticLayout` against the same width, size and line count as
+   `text_under_button.xml`). Labels vary by feature, locale and translation,
+   so a hardcoded length limit would be wrong somewhere.
+2. **Overflow is a destination, not a failure.** Anything that does not fit —
+   or does not fit *the remaining slots* — goes to "Other options" rather than
+   being squeezed into the row.
+
+Injected actions must also re-run the host's own overflow accounting
+(`showMoreButtonIfNeeded`) so built-in actions collapse around them. Reserve
+slots first and let that accounting rebalance: measuring free space at
+resolve time always concludes there is none, because nothing has collapsed
+yet.
+
 ### T11 — A control that carries state must announce it
 
 The shared `Checkbox`/`RadioButton` were drawn but not described: no
