@@ -209,7 +209,7 @@ sunset date and then fails with no warning.
 a **developer** signal, not a user-facing one: a viewer cannot act on it, so it
 must never reach the UI or repeat per request.
 
-### T10b — A control never shows a clipped label
+### T11 — A control never shows a clipped label
 
 Detail-row buttons are a fixed-width, two-line field. Contribution labels come
 from the *server* and are far longer than the app's own one-word labels
@@ -233,7 +233,7 @@ slots first and let that accounting rebalance: measuring free space at
 resolve time always concludes there is none, because nothing has collapsed
 yet.
 
-### T11 — A control that carries state must announce it
+### T12 — A control that carries state must announce it
 
 The shared `Checkbox`/`RadioButton` were drawn but not described: no
 `toggleableState`, no `selected`. On a 10-foot UI that means a screen-reader
@@ -245,13 +245,37 @@ Any control representing state gets semantics at the component, not the call
 site, so every screen using it benefits at once. `atv_driver`'s
 `toggle_state()` then reads the real value.
 
-### T12 — Never log a server-controlled response fragment
+### T13 — Never log a server-controlled response fragment
 
 `SerializationException` messages embed the offending JSON. `Timber.DebugTree`
 is planted in release builds. Log the message, never the throwable, for any
 parse failure — the platform client already does this deliberately.
 
 ---
+
+### T14 — A title linked to a Jellyfin item is already in the library
+
+Seerr reports its own `status`, and that status describes *Seerr's* request
+pipeline, not your library. A title the server has matched to a Jellyfin item
+carries a `jellyfinMediaId`, and that link is the authoritative answer to "do I
+have this?" — whatever `status` says beside it.
+
+Trusting the raw status offers a Request action for something the user is
+already looking at in their own library, which reads as the integration being
+broken.
+
+Resolve the effective status once, at the boundary:
+
+```kotlin
+private fun effectiveStatus(wire: Int?, jellyfinMediaId: String?) =
+    if (!jellyfinMediaId.isNullOrBlank()) SeerrMediaStatus.AVAILABLE
+    else SeerrMediaStatus.fromWire(wire)
+```
+
+Apply it in **every** mapper, not just the one whose bug you noticed. Cards and
+detail screens are mapped separately here, so fixing `toDiscoverItem` left
+`toItemDetails` still offering Request for owned titles. The 4K state is a
+separate axis with its own link — resolve it against `jellyfinMediaId4k`.
 
 ## Testing
 
