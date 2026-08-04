@@ -14,6 +14,9 @@ records what actually breaks, with the evidence that established it.
 Like the Canopy guide, it favours precision over hand-holding, and every claim
 that came from a live device says so.
 
+See [Features](features.md) for screenshots and short videos of every surface
+described here.
+
 ---
 
 ## The Android TV platform
