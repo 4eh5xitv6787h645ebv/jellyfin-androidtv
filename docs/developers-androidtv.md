@@ -270,7 +270,20 @@ changes later runs.
 
 **This layer earns its keep.** The T1 crash survived four clean scenario runs
 and could not be reproduced by hand; the soak found it in 13 moves and gave a
-replayable path.
+replayable path. It also caught a null-adapter regression that a passing
+scenario suite missed entirely.
+
+A 25-minute run on merged master (seed 42) covered **1068 moves with zero
+failures**, and settled the memory question for good: PSS climbs while the
+bitmap cache fills and then sits flat.
+
+```
+PSS MB by move: 0:119 100:109 200:159 300:318 400:286 600:288 800:288 1000:284
+```
+
+Steady from move ~300 onward across 750 further moves, with the Java heap
+*shrinking* 27 → 19 MB. Growth that plateaus is a cache; growth that keeps
+climbing is a leak.
 
 ### Driver
 

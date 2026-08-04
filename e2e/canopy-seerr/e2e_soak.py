@@ -47,7 +47,7 @@ SCREEN_MARKERS = [
     ('person', ('Known for', 'Born')),
     ('discover', ('Trending', 'Popular movies', 'Your watchlist')),
     ('search', ('Discover · Seerr',)),
-    ('item-detail', ('Play', 'Watched', 'Favorite')),
+    ('item-detail', ('Play', 'Watched', 'Favorite', 'Cast & crew', 'More like this')),
     ('home', ('My media', 'Continue watching', 'Recently added')),
 ]
 
@@ -63,15 +63,29 @@ class Soak:
         self.failures = []
         self.steps = 0
         self.memory = []
+        self.last_screen = None
+        self.unresolved_reads = 0
 
     # -- observation ----------------------------------------------------
 
     def screen(self):
+        """Classify the current screen.
+
+        Markers are text that identifies a screen, but most of them only
+        appear near the top: once a row screen is scrolled down, every marker
+        is off-screen and a naive classifier reports "unknown". A screen does
+        not change without a navigation action, so an unmatched read keeps the
+        previous classification and is counted separately, which keeps the
+        coverage report meaningful without pretending to more certainty than
+        there is.
+        """
         texts = self.d.texts(200)
         for name, markers in SCREEN_MARKERS:
             if any(any(m in t for t in texts) for m in markers):
+                self.last_screen = name
                 return name, texts
-        return ('unknown', texts)
+        self.unresolved_reads += 1
+        return (self.last_screen or 'unknown', texts)
 
     def note(self, move):
         self.path.append(move)
@@ -149,10 +163,25 @@ class Soak:
         self.path.append('|recovered|')
 
     def sample_memory(self):
+        """Sample PSS plus the breakdown that distinguishes a leak from cache.
+
+        Bitmap caches land in Graphics/Native; an object leak shows up as Java
+        heap that never comes back. Total PSS alone cannot tell them apart.
+        """
         out = self.d.shell('dumpsys meminfo %s' % self.d.package)
-        m = re.search(r'TOTAL(?:\s+PSS)?:\s*(\d+)', out)
-        if m:
-            self.memory.append((self.steps, int(m.group(1))))
+        total = re.search(r'TOTAL(?:\s+PSS)?:\s*(\d+)', out)
+        if not total:
+            return
+        def field(label):
+            m = re.search(label + r':?\s+(\d+)', out)
+            return int(m.group(1)) if m else 0
+        self.memory.append((
+            self.steps,
+            int(total.group(1)),
+            field(r'Java Heap'),
+            field(r'Native Heap'),
+            field(r'Graphics'),
+        ))
 
     # -- moves ----------------------------------------------------------
 
@@ -343,11 +372,20 @@ def main():
         soak.steps, elapsed, len(soak.failures), seed), flush=True)
     print('screens visited: %s' % ', '.join(
         '%s=%d' % (k, v) for k, v in sorted(visited.items(), key=lambda kv: -kv[1])), flush=True)
+    if soak.unresolved_reads:
+        print('  (%d of %d reads matched no marker and inherited the previous screen)' % (
+            soak.unresolved_reads, soak.steps or 1), flush=True)
     if soak.memory:
         first, last = soak.memory[0][1], soak.memory[-1][1]
-        peak = max(v for _, v in soak.memory)
+        peak = max(row[1] for row in soak.memory)
         print('memory PSS: start %d kB, end %d kB, peak %d kB (%+.0f%%)' % (
             first, last, peak, (last - first) * 100.0 / max(first, 1)), flush=True)
+        print('  java heap %d -> %d kB | native %d -> %d kB | graphics %d -> %d kB' % (
+            soak.memory[0][2], soak.memory[-1][2],
+            soak.memory[0][3], soak.memory[-1][3],
+            soak.memory[0][4], soak.memory[-1][4]), flush=True)
+        trail = ' '.join('%d:%d' % (row[0], row[1] // 1024) for row in soak.memory)
+        print('  PSS MB by move: %s' % trail, flush=True)
     for kind, detail, trail in soak.failures:
         print('  %-12s %s | path: %s' % (kind, str(detail)[:160], trail), flush=True)
 
