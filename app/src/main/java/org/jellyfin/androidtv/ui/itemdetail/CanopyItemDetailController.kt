@@ -327,7 +327,6 @@ internal class CanopyMenuAction(
 	fun run() = onSelected()
 }
 
-private const val CANOPY_BUTTON_SIZE_DP = 40
 private const val MAX_CANOPY_TILE_IDS = 5
 private const val CANOPY_ACTION_ID_BASE = Int.MIN_VALUE + 100
 private const val STATUS_TEXT_SIZE_SP = 18f
