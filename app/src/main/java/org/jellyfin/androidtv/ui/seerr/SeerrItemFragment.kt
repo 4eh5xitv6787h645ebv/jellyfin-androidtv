@@ -314,6 +314,11 @@ class SeerrItemFragment : Fragment() {
 		imdb?.let { add(getString(R.string.canopy_seerr_rating_imdb, it)) }
 	}.joinToString(separator = " · ")
 
+	/**
+	 * Seasons the library is missing are still worth requesting for a series
+	 * that is only partly present, but a title the library already holds in
+	 * full never is.
+	 */
 	private fun hasRequestableSeasons(details: SeerrItemDetails, is4k: Boolean = false): Boolean =
 		details.item.mediaType == SeerrMediaType.TV && details.seasons.any { it.statusFor(is4k).requestable }
 

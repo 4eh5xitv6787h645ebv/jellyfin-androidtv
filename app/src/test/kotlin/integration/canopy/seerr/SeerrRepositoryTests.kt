@@ -387,6 +387,23 @@ class SeerrRepositoryTests : FunSpec({
 		results[1].status shouldBe SeerrMediaStatus.PENDING
 	}
 
+	test("details of an owned title are not requestable") {
+		val repository = SeerrRepository(
+			apiWith(
+				// Seerr reports "unknown" yet links a Jellyfin item: the title
+				// is in the library and must not be offered for request.
+				"/JellyfinCanopy/seerr/movie/550" to """
+					{"id": 550, "title": "Owned", "releaseDate": "1999-10-15",
+					 "mediaInfo": {"status": 1, "jellyfinMediaId": "0b67e975-99cb-4bf3-96d3-b13ec50365ff"}}
+				""".trimIndent(),
+			),
+		)
+
+		val details = repository.details(SeerrMediaType.MOVIE, 550).shouldNotBeNull()
+		details.item.status shouldBe SeerrMediaStatus.AVAILABLE
+		details.item.status.requestable shouldBe false
+	}
+
 	test("media status wire mapping") {
 		SeerrMediaStatus.fromWire(null) shouldBe SeerrMediaStatus.NOT_REQUESTED
 		SeerrMediaStatus.fromWire(1) shouldBe SeerrMediaStatus.NOT_REQUESTED

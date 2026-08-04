@@ -10,6 +10,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.text.StaticLayout;
+import android.text.TextPaint;
+import android.text.TextUtils;
+import android.util.TypedValue;
+import android.graphics.text.LineBreaker;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -137,6 +142,17 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     private CanopyItemDetailController mCanopyController;
     private final List<TextUnderButton> mCanopyActionButtons = new ArrayList<>();
     private List<CanopyMenuAction> mCanopyMenuActions = new ArrayList<>();
+    // Two Canopy buttons plus the built-in actions the native accounting
+    // keeps visible fit the row without any label being squeezed; more than
+    // that is what clipped labels mid-word. Everything else goes to the
+    // overflow menu.
+    private static final int CANOPY_INLINE_LIMIT = 2;
+    // Mirrors res/layout/text_under_button.xml; a label is only placed on a
+    // button when it renders whole at these dimensions.
+    private static final int BUTTON_LABEL_WIDTH_DP = 85;
+    private static final int BUTTON_LABEL_PADDING_DP = 5;
+    private static final int BUTTON_LABEL_MAX_LINES = 2;
+    private static final float BUTTON_LABEL_TEXT_SP = 12f;
     private ListRow mCanopyActionRow;
 
     private Handler mLoopHandler = new Handler();
@@ -501,52 +517,64 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     }
 
     /**
-     * Places Canopy actions as native detail buttons, inserted before the
-     * "Other options" button. The row is rebound in place so it is never
-     * detached while focused.
+     * Places Canopy actions on the details screen.
+     *
+     * As many as fit become buttons beside the built-in ones; the rest go to
+     * "Other options". The row has a fixed budget of visible actions, and a
+     * squeezed button renders its label wrapped and clipped, so the count is
+     * capped rather than letting the row overflow.
+     *
+     * @param forceMenu place every action in the menu regardless of room.
      */
-    void setCanopyActionButtons(@NonNull List<TextUnderButton> buttons) {
+    void setCanopyActions(@NonNull List<CanopyMenuAction> actions, boolean forceMenu) {
         if (mDetailsOverviewRow == null) return;
         MyDetailsOverviewRowPresenter.ViewHolder holder = mDorPresenter.getViewHolder();
 
-        // Mutate the row in place. Rebinding the whole row would clear and
-        // re-add every button, which visibly flashes the action row and moves
-        // buttons the user may already be focused on.
+        // Mutate the row in place: rebinding it would clear and re-add every
+        // button, flashing the row and moving buttons the user may be on.
         for (TextUnderButton button : mCanopyActionButtons) {
             mDetailsOverviewRow.removeAction(button);
             if (holder != null) holder.removeActionView(button);
         }
         mCanopyActionButtons.clear();
 
-        int index = moreButton != null ? mDetailsOverviewRow.indexOfAction(moreButton) : -1;
-        if (index < 0) index = mDetailsOverviewRow.getActions().size();
-        int viewIndex = -1;
-        if (holder != null && moreButton != null) viewIndex = holder.indexOfActionView(moreButton);
-
-        for (TextUnderButton button : buttons) {
-            mDetailsOverviewRow.addAction(index++, button);
-            mCanopyActionButtons.add(button);
-            if (holder != null) {
-                if (viewIndex < 0) {
-                    // No More button yet: append so nothing already placed moves.
-                    holder.addActionView(button, Integer.MAX_VALUE);
-                } else {
-                    holder.addActionView(button, viewIndex++);
-                }
+        // An action becomes a button only when its label renders whole and
+        // the row still has a slot; everything else goes to "Other options".
+        List<CanopyMenuAction> inline = new ArrayList<>();
+        List<CanopyMenuAction> overflow = new ArrayList<>();
+        for (CanopyMenuAction action : actions) {
+            if (!forceMenu && inline.size() < CANOPY_INLINE_LIMIT && labelFitsButton(action.getLabel())) {
+                inline.add(action);
+            } else {
+                overflow.add(action);
             }
         }
 
-        // Canopy actions count towards the row's budget like any other action.
-        // Without this the row overflows its width and the last button is
-        // squeezed until its label breaks mid-word; re-running the native
-        // accounting collapses the lowest-priority actions into "Other
-        // options" exactly as it does for the app's own buttons.
+        int index = moreButton != null ? mDetailsOverviewRow.indexOfAction(moreButton) : -1;
+        if (index < 0) index = mDetailsOverviewRow.getActions().size();
+        int viewIndex = holder != null && moreButton != null ? holder.indexOfActionView(moreButton) : -1;
+
+        int buttonSize = Utils.convertDpToPixel(requireContext(), 40);
+        for (CanopyMenuAction action : inline) {
+            TextUnderButton button = TextUnderButton.create(
+                    requireContext(), action.getIconRes(), buttonSize, 2, action.getLabel(),
+                    v -> action.run());
+            button.setContentDescription(action.getContentDescription());
+            mDetailsOverviewRow.addAction(index++, button);
+            mCanopyActionButtons.add(button);
+            if (holder != null) {
+                if (viewIndex < 0) holder.addActionView(button, Integer.MAX_VALUE);
+                else holder.addActionView(button, viewIndex++);
+            }
+        }
+
+        setCanopyMenuActions(overflow);
         showMoreButtonIfNeeded();
     }
 
     /**
-     * Places Canopy actions inside the "Other options" popup menu, forcing the
-     * button visible when entries exist even if no native action collapsed.
+     * Puts Canopy actions in the "Other options" popup, making the button
+     * visible when entries exist even if no built-in action collapsed.
      */
     void setCanopyMenuActions(@NonNull List<CanopyMenuAction> actions) {
         boolean hadActions = !mCanopyMenuActions.isEmpty();
@@ -555,7 +583,8 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
         if (!actions.isEmpty() && moreButton.getVisibility() != View.VISIBLE) {
             moreButton.setVisibility(View.VISIBLE);
             if (mDorPresenter.getViewHolder() != null) mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
-        } else if (actions.isEmpty() && hadActions && collapsedOptions == 0 && moreButton.getVisibility() == View.VISIBLE) {
+        } else if (actions.isEmpty() && hadActions && collapsedOptions == 0
+                && moreButton.getVisibility() == View.VISIBLE) {
             moreButton.setVisibility(View.GONE);
             if (mDorPresenter.getViewHolder() != null) mDorPresenter.getViewHolder().setItem(mDetailsOverviewRow);
         }
@@ -564,6 +593,39 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     @NonNull
     List<CanopyMenuAction> getCanopyMenuActions() {
         return mCanopyMenuActions;
+    }
+
+    /**
+     * Whether a label renders whole on a detail button.
+     *
+     * A button label is a fixed-width, two-line field. A label that does not
+     * fit gets clipped, which reads as a broken control, so an action whose
+     * label cannot be shown in full belongs in the overflow menu instead.
+     * Measured rather than guessed, because contribution labels come from the
+     * server and vary by feature, locale and translation.
+     */
+    private boolean labelFitsButton(String label) {
+        if (label == null || label.isEmpty()) return true;
+
+        TextPaint paint = new TextPaint();
+        paint.setAntiAlias(true);
+        paint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                BUTTON_LABEL_TEXT_SP, getResources().getDisplayMetrics()));
+
+        int width = Utils.convertDpToPixel(requireContext(),
+                BUTTON_LABEL_WIDTH_DP - BUTTON_LABEL_PADDING_DP * 2);
+        StaticLayout layout = StaticLayout.Builder
+                .obtain(label, 0, label.length(), paint, width)
+                .setMaxLines(BUTTON_LABEL_MAX_LINES)
+                .setEllipsize(TextUtils.TruncateAt.END)
+                .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(LineBreaker.HYPHENATION_FREQUENCY_NONE)
+                .build();
+
+        for (int line = 0; line < layout.getLineCount(); line++) {
+            if (layout.getEllipsisCount(line) > 0) return false;
+        }
+        return layout.getLineCount() <= BUTTON_LABEL_MAX_LINES;
     }
 
     void setCanopyActionRow(@Nullable ListRow row) {

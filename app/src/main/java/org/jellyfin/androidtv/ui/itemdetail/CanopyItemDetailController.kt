@@ -119,30 +119,24 @@ internal class CanopyItemDetailController(
 		if (value == null || (value.actions.isEmpty() && value.statuses.isEmpty())) {
 			overflowActions = emptyList()
 			fragment.setCanopyActionRow(null)
-			fragment.setCanopyActionButtons(emptyList())
-			fragment.setCanopyMenuActions(emptyList())
+			fragment.setCanopyActions(emptyList(), false)
 			return
 		}
 
 		when (placement) {
 			CanopyActionsPlacement.BUTTONS -> {
 				fragment.setCanopyActionRow(null)
-				fragment.setCanopyMenuActions(emptyList())
 				showInlineButtons(value)
 				return
 			}
 
 			CanopyActionsPlacement.OTHER_OPTIONS -> {
 				fragment.setCanopyActionRow(null)
-				fragment.setCanopyActionButtons(emptyList())
 				showMenuActions(value)
 				return
 			}
 
-			CanopyActionsPlacement.ROW -> {
-				fragment.setCanopyActionButtons(emptyList())
-				fragment.setCanopyMenuActions(emptyList())
-			}
+			CanopyActionsPlacement.ROW -> fragment.setCanopyActions(emptyList(), false)
 		}
 
 		val layout = CanopyActionLayout.create(value.actions)
@@ -186,39 +180,33 @@ internal class CanopyItemDetailController(
 	 * contributions carry no interaction; their state is visible in the
 	 * action dialogs, so they are only exposed via accessibility here.
 	 */
+	/**
+	 * Hands the actions to the details screen, which places as many as fit in
+	 * the button row and sends the rest to "Other options".
+	 */
 	private fun showInlineButtons(value: CanopyItemDetailSurface) {
 		overflowActions = emptyList()
-		val context = fragment.context ?: return
-		val buttonSize = Utils.convertDpToPixel(context, CANOPY_BUTTON_SIZE_DP)
-		val statusDescription = value.statuses.joinToString(separator = " · ") { it.label }
+		fragment.setCanopyActions(canopyActions(value), false)
+	}
 
-		val buttons = value.actions.map { action ->
-			TextUnderButton.create(
-				context,
-				action.icon.drawable,
-				buttonSize,
-				2,
-				action.label,
-			) {
-				coordinator.prepare(action.id)
-			}.apply {
+	/** Renders every action as an entry in the "Other options" popup menu. */
+	private fun showMenuActions(value: CanopyItemDetailSurface) {
+		overflowActions = emptyList()
+		fragment.setCanopyActions(canopyActions(value), true)
+	}
+
+	private fun canopyActions(value: CanopyItemDetailSurface): List<CanopyMenuAction> {
+		val statusDescription = value.statuses.joinToString(separator = " · ") { it.label }
+		return value.actions.map { action ->
+			CanopyMenuAction(
+				label = action.label,
+				iconRes = action.icon.drawable,
 				contentDescription = describedLabel(
 					describedLabel(action.label, action.description),
 					statusDescription.takeIf { it.isNotEmpty() },
-				)
-			}
+				),
+			) { coordinator.prepare(action.id) }
 		}
-		fragment.setCanopyActionButtons(buttons)
-	}
-
-	/** Renders actions as entries in the "Other options" popup menu. */
-	private fun showMenuActions(value: CanopyItemDetailSurface) {
-		overflowActions = emptyList()
-		fragment.setCanopyMenuActions(
-			value.actions.map { action ->
-				CanopyMenuAction(action.label) { coordinator.prepare(action.id) }
-			},
-		)
 	}
 
 	private fun showOverflow() {
@@ -325,8 +313,15 @@ internal fun dispatchCanopyRefresh(
 	if (CanopyRefreshTarget.ITEM_DETAIL_SURFACE in targets) onItemDetailSurface()
 }
 
+/**
+ * A Canopy action the details screen can present either as a button or as an
+ * entry in the overflow menu. The screen decides which, because only it knows
+ * how much room the button row has left.
+ */
 internal class CanopyMenuAction(
 	val label: String,
+	@androidx.annotation.DrawableRes val iconRes: Int,
+	val contentDescription: String,
 	private val onSelected: () -> Unit,
 ) {
 	fun run() = onSelected()
