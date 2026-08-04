@@ -535,6 +535,13 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
                 }
             }
         }
+
+        // Canopy actions count towards the row's budget like any other action.
+        // Without this the row overflows its width and the last button is
+        // squeezed until its label breaks mid-word; re-running the native
+        // accounting collapses the lowest-priority actions into "Other
+        // options" exactly as it does for the app's own buttons.
+        showMoreButtonIfNeeded();
     }
 
     /**
