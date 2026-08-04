@@ -20,6 +20,8 @@ import org.jellyfin.androidtv.data.model.DataRefreshService
 import org.jellyfin.androidtv.data.repository.CustomMessageRepository
 import org.jellyfin.androidtv.data.repository.CustomMessageRepositoryImpl
 import org.jellyfin.androidtv.data.repository.ExternalAppRepository
+import org.jellyfin.androidtv.data.repository.CanopySpoilerRepository
+import org.jellyfin.androidtv.data.repository.CanopySpoilerRepositoryImpl
 import org.jellyfin.androidtv.data.repository.ItemMutationRepository
 import org.jellyfin.androidtv.data.repository.ItemMutationRepositoryImpl
 import org.jellyfin.androidtv.data.repository.NotificationsRepository
@@ -160,6 +162,7 @@ val appModule = module {
 	single<UserViewsRepository> { UserViewsRepositoryImpl(get()) }
 	single<NotificationsRepository> { NotificationsRepositoryImpl(get(), get()) }
 	single<ItemMutationRepository> { ItemMutationRepositoryImpl(get(), get()) }
+	single<CanopySpoilerRepository> { CanopySpoilerRepositoryImpl(get()) }
 	single<CustomMessageRepository> { CustomMessageRepositoryImpl() }
 	single<NavigationRepository> { NavigationRepositoryImpl(Destinations.home) }
 	single<SearchRepository> { SearchRepositoryImpl(get()) }

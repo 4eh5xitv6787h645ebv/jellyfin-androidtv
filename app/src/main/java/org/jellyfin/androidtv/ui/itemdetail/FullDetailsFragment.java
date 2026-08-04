@@ -921,6 +921,7 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
     TextUnderButton moreButton;
     TextUnderButton playButton = null;
     TextUnderButton trailerButton = null;
+    TextUnderButton spoilerBlurButton = null;
 
     private void addButtons(int buttonSize) {
         BaseItemDto baseItem = mBaseItem;
@@ -1134,6 +1135,22 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
             });
             favButton.setActivated(userData.isFavorite());
             mDetailsOverviewRow.addAction(favButton);
+
+            // Spoiler Guard (Jellyfin Canopy plugin). Series only: Canopy enrols whole
+            // shows, not individual episodes. The initial state is unknown until the
+            // plugin answers, so the button starts inactive and refreshSpoilerBlurState()
+            // corrects it - a plugin that is absent simply leaves it inactive.
+            if (mBaseItem.getType() == BaseItemKind.SERIES) {
+                spoilerBlurButton = TextUnderButton.create(requireContext(), R.drawable.ic_spoiler_guard, buttonSize, 2, getString(R.string.lbl_spoiler_guard), new View.OnClickListener() {
+                    @Override
+                    public void onClick(final View v) {
+                        FullDetailsFragmentHelperKt.toggleSpoilerBlur(FullDetailsFragment.this);
+                    }
+                });
+                spoilerBlurButton.setActivated(false);
+                mDetailsOverviewRow.addAction(spoilerBlurButton);
+                FullDetailsFragmentHelperKt.refreshSpoilerBlurState(FullDetailsFragment.this);
+            }
         }
 
         if (mBaseItem.getType() == BaseItemKind.EPISODE && mBaseItem.getSeriesId() != null) {
